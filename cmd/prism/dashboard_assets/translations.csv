@@ -1,0 +1,217 @@
+key,zh-CN,en-US,ja-JP
+language.zh_cn,简体中文,Simplified Chinese,簡体中国語
+language.en_us,English,English,English
+language.ja_jp,日本語,Japanese,日本語
+drawer.language,语言,Language,言語
+drawer.appearance,外观,Appearance,外観
+drawer.check_update,检查更新,Check for Updates,更新を確認
+drawer.new_version,新版本,New Version,新バージョン
+drawer.install_update,立即更新,Update Now,今すぐ更新
+drawer.updating,更新中…,Updating…,更新中…
+drawer.changelog,更新日志,Changelog,更新履歴
+drawer.restart_hub,重启 Hub,Restart Hub,Hub を再起動
+drawer.logout,退出登录,Log out,ログアウト
+common.back,返回,Back,戻る
+common.refresh_agents,刷新 Agents,Refresh Agents,Agent を更新
+common.open_menu,打开菜单,Open menu,メニューを開く
+common.install,安装,Install,インストール
+common.scan_local_plugins,扫描本地 Plugins,Scan local plugins,ローカル Plugin をスキャン
+common.loading,读取中…,Loading…,読み込み中…
+common.system_language,跟随系统,System default,システム設定
+common.cancel,取消,Cancel,キャンセル
+common.continue,继续,Continue,続行
+common.confirm,确认,Confirm,確認
+login.region,区域,Region,リージョン
+login.account,Rokid 账号,Rokid Account,Rokid アカウント
+login.password,密码,Password,パスワード
+login.show_password,显示密码,Show password,パスワードを表示
+login.hide_password,隐藏密码,Hide password,パスワードを隠す
+login.submit,登录,Log in,ログイン
+login.forgot_password,忘记密码？,Forgot password?,パスワードを忘れた場合
+login.credentials_mismatch,账号或密码不匹配，请检查后重试。,Account or password does not match. Please check and try again.,アカウントまたはパスワードが一致しません。確認して再試行してください。
+login.register_account,注册账号,Register account,アカウントを登録
+login.username_placeholder,手机号、邮箱或用户名,"Phone, email, or username",電話番号、メール、またはユーザー名
+login.password_placeholder,请输入密码,Enter your password,パスワードを入力
+status.hub,Hub,Hub,Hub
+status.server,服务器,Server,サーバー
+status.host_plugin_sync,Host Plugin,Host Plugin,Host Plugin
+nav.remote_panel,远程面板,Remote panel,リモートパネル
+nav.remote_panel_qr_hint,扫描二维码，在手机上打开远程面板,Scan the QR code to open the remote panel on your phone,QRコードをスキャンしてスマートフォンでリモートパネルを開く
+status.checking,检查中,Checking…,確認中…
+status.running,运行中,Running,実行中
+status.starting,启动中,Starting,起動中
+status.not_running,未运行,Not running,停止中
+status.connected,已连接,Connected,接続済み
+status.connecting,连接中,Connecting…,接続中…
+status.disconnected,未连接,Disconnected,未接続
+status.host_plugin_synced,已同步,Synced,同期済み
+status.host_plugin_syncing,同步中,Syncing…,同期中…
+status.host_plugin_stale,使用上次授权,Using previous authorization,前回の認可を使用中
+status.host_plugin_auth_required,需要重新登录,Sign in required,再ログインが必要
+status.host_plugin_error,同步失败,Sync failed,同期に失敗
+status.logged_in,已登录,Logged in,ログイン済み
+status.logged_out,未登录,Logged out,未ログイン
+status.no_warnings,当前没有额外警告，主链路状态正常。,No additional warnings. The main flow is healthy.,追加の警告はありません。主要な接続は正常です。
+error.request_failed,Dashboard 请求失败,Dashboard request failed,Dashboard リクエストに失敗しました
+error.connection_lost,Dashboard 与 Hub 连接中断，正在等待服务恢复。,Dashboard lost its connection to Hub. Waiting for it to recover.,Dashboard と Hub の接続が切断されました。復旧を待機しています。
+action.restart_requested,Hub 服务重启已请求，正在加载新配置。,Hub restart requested. Loading the new configuration.,Hub の再起動を要求しました。新しい設定を読み込んでいます。
+action.change_saved,变更已保存，无需重启 Hub。,Changes saved. Hub restart is not required.,変更を保存しました。Hub の再起動は不要です。
+action.refresh_connection,刷新连接,Refresh connection,接続を更新
+action.connection_refreshed,服务器连接已刷新,Server connection refreshed,サーバー接続を更新しました
+recovery.server_disconnected,服务器未连接,Server disconnected,サーバー未接続
+recovery.pending,待处理,Needs attention,対応が必要
+recovery.collapse,收起待处理通知,Collapse pending items,要対応項目を閉じる
+recovery.expand,展开待处理通知,Expand pending items,要対応項目を開く
+recovery.server_disconnected_detail,无法连接 Prism 服务器。刷新连接后将重新建立会话。,Prism cannot reach the server. Refresh the connection to establish a new session.,Prism はサーバーに接続できません。接続を更新してセッションを再確立してください。
+recovery.browser_offline_detail,当前设备网络不可用。恢复网络后刷新连接。,"This device is offline. Restore network access, then refresh the connection.",このデバイスはオフラインです。ネットワークを復旧してから接続を更新してください。
+recovery.agent_interrupted,{name} 已中断,{name} is unavailable,{name} は中断しています
+recovery.agent_interrupted_detail,{name} 需要重新由 Prism 托管后才能恢复远程控制。,{name} needs to be managed by Prism again before remote control can resume.,リモート操作を再開するには、{name} を再度 Prism の管理下で起動する必要があります。
+agent.install_by_path,通过路径安装 Agent 插件,Install Agent plugin from a path,パスから Agent Plugin をインストール
+agent.scan_local,扫描本地 Plugins,Scan local plugins,ローカル Plugin をスキャン
+agent.install_source_placeholder,支持本地路径、Git URL，以及 .zip / .tar.gz 下载地址,"Local path, Git URL, or .zip / .tar.gz download URL",ローカルパス、Git URL、または .zip / .tar.gz のダウンロード URL
+agent.install,安装,Install,インストール
+agent.installing,安装中,Installing,インストール中
+agent.downloading,下载中,Downloading,ダウンロード中
+agent.bridge_plugins,Agents,Agents,Agents
+agent.manage_plugins,管理插件,Manage plugins,プラグインを管理
+agent.plugin_management,插件管理,Plugin management,プラグイン管理
+agent.close_plugin_management,关闭插件管理,Close plugin management,プラグイン管理を閉じる
+agent.refresh_local_plugins,刷新本地插件,Refresh local plugins,ローカルプラグインを更新
+agent.not_installed,未安装,Not installed,未インストール
+agent.uninstall_short,卸载,Uninstall,アンインストール
+agent.no_manageable_plugins,还没有可管理的插件,No manageable plugins yet,管理できるプラグインはまだありません
+agent.local_plugins_refreshed,本地插件库已刷新,Local plugin library refreshed,ローカルプラグインライブラリを更新しました
+agent.load_local_plugins_failed,读取本地插件库失败,Unable to load the local plugin library,ローカルプラグインライブラリを読み込めませんでした
+agent.install_plugin_failed,安装插件失败,Unable to install plugin,プラグインをインストールできませんでした
+agent.plugin_installed,插件已安装：{name},Plugin installed: {name},プラグインをインストールしました: {name}
+agent.plugin_uninstalled,插件已卸载：{name},Plugin uninstalled: {name},プラグインをアンインストールしました: {name}
+agent.local,本机,Local,ローカル
+agent.remote_device,远程设备,Remote device,リモートデバイス
+agent.installed,已安装,Installed,インストール済み
+agent.runtime_available,Runtime 可用,Runtime available,Runtime 利用可能
+agent.runtime_unavailable,Runtime 中断,Runtime unavailable,Runtime 利用不可
+agent.remote_enabled,已开启远程,Remote enabled,リモート有効
+agent.remote_disabled,远程未开启,Remote disabled,リモート無効
+agent.menu_title,配置,Configuration,設定
+agent.five_hour_remaining,5 小时剩余,5-hour remaining,5時間の残り
+agent.weekly_remaining,周剩余,Weekly remaining,今週の残り
+agent.usage_reset,重置,Reset,リセット
+agent.online,在线,Online,オンライン
+agent.offline,未在线,Offline,オフライン
+agent.open_actions,打开 {name} 操作,Open {name} actions,{name} の操作を開く
+agent.open_remote_actions,打开 {name} 远程操作,Open {name} remote actions,{name} のリモート操作を開く
+agent.enable_remote,开启远程,Enable remote,リモートを有効化
+agent.refresh,刷新 Agent,Refresh Agent,Agent を更新
+agent.update,更新,Update,更新
+agent.updating,更新中,Updating,更新中
+agent.requires_hub_update,需要升级 Hub,Hub update required,Hub の更新が必要
+agent.unsupported_platform,不支持当前平台,Unsupported on this platform,このプラットフォームは非対応
+agent.remote_enabled_success,{name} 已开启远程。,Remote enabled for {name}.,{name} のリモートを有効化しました。
+agent.rename,编辑 Agent 信息,Edit Agent information,Agent 情報を編集
+agent.runtime_mode,运行模式,Runtime mode,実行モード
+agent.edit_description,说明,Description,説明
+agent.edit_icon_url,图标 URL,Icon URL,アイコン URL
+agent.edit_save,保存 Agent 信息,Save Agent information,Agent 情報を保存
+agent.uninstall,卸载 Agent,Uninstall Agent,Agent をアンインストール
+agent.managed_launch,托管 Agent,Launch managed Agent,管理 Agent を起動
+agent.managed_relaunch,重新托管 Agent,Relaunch managed Agent,管理 Agent を再起動
+agent.managed_starting,正在以 Prism 托管模式启动 {name}…,Starting {name} in Prism managed mode…,Prism 管理モードで {name} を起動しています…
+agent.managed_recovered,{name} 已重新托管。,{name} is managed by Prism again.,{name} を再び Prism 管理にしました。
+agent.retry_check,重新检测 {name},Recheck {name},{name} を再確認
+doctor.open_panel,打开诊断,Open diagnostics,診断を開く
+doctor.close,关闭诊断,Close diagnostics,診断を閉じる
+doctor.drawer_entry,诊断与自愈,Diagnostics & self-healing,診断と自動修復
+doctor.panel_title,诊断与自愈,Diagnostics & self-healing,診断と自動修復
+doctor.run_now,立即检查,Run checks now,今すぐ診断
+doctor.running,检查中…,Running checks…,診断中…
+doctor.run_complete,诊断已完成,Diagnostics complete,診断が完了しました
+doctor.load_failed,诊断信息加载失败,Failed to load diagnostics,診断情報の読み込みに失敗しました
+doctor.findings_title,发现的问题,Findings,検出された問題
+doctor.no_findings,未发现问题,No issues found,問題は見つかりませんでした
+doctor.checks_title,检查项,Checks,診断項目
+doctor.last_run,上次检查 {time},Last run {time},前回の診断 {time}
+doctor.never_run,尚未运行,Not run yet,未実行
+doctor.first_detected,首次检出 {time},First detected {time},最初に検出 {time}
+doctor.duration_minutes,{count} 分钟,{count} min,{count} 分
+doctor.duration_hours,{count} 小时,{count} h,{count} 時間
+doctor.duration_days,{count} 天,{count} d,{count} 日
+doctor.check_error,检查失败,Check failed,診断失敗
+doctor.pending_count,{count} 项待处理,{count} pending,{count} 件の保留
+doctor.state_ok,自检正常,All checks passed,診断は正常です
+doctor.state_findings,{count} 项待处理,{count} pending,{count} 件の保留
+doctor.open_findings_count,{count} 项,{count} findings,{count} 件
+doctor.unknown_finding,检测到异常,Anomaly detected,異常を検出しました
+doctor.check.hub.config_parse,配置文件,Configuration file,設定ファイル
+doctor.check.hub.db,本地数据库,Local database,ローカルデータベース
+doctor.check.hub.disk,磁盘空间,Disk space,ディスク容量
+doctor.check.hub.logs,日志目录,Log directory,ログディレクトリ
+doctor.check.conn.realtime,云端连接,Cloud connection,クラウド接続
+doctor.check.plugin.runtime,插件运行时,Plugin runtimes,プラグインランタイム
+doctor.check.plugin.lease,运行时租约,Runtime leases,ランタイムリース
+doctor.check.plugin.install_state,插件安装状态,Plugin install state,プラグインのインストール状態
+doctor.check.plugin.active_version,插件活跃版本,Plugin active versions,プラグインの有効バージョン
+doctor.check.plugin.node_runtime,Node 运行时,Node runtime,Node ランタイム
+doctor.check.plugin.catalog_cache,插件目录缓存,Plugin catalog cache,プラグインカタログキャッシュ
+doctor.check.agent.managed,托管应用,Managed apps,管理アプリ
+doctor.finding_config_parse,配置文件无法解析，部分功能不可用。,The configuration file cannot be parsed; some features are unavailable.,設定ファイルを解析できません。一部の機能が利用できません。
+doctor.finding_db,本地数据库不可用。,The local database is unavailable.,ローカルデータベースが利用できません。
+doctor.finding_disk,磁盘剩余空间不足（约 {free_mb} MB）。,Low disk space (about {free_mb} MB free).,ディスクの空き容量が不足しています（約 {free_mb} MB）。
+doctor.finding_logs_large,日志目录占用过大（约 {size_mb} MB）。,The log directory is large (about {size_mb} MB).,ログディレクトリの容量が大きくなっています（約 {size_mb} MB）。
+doctor.finding_conn_auth,云端连接异常：{state}。,Cloud connection problem: {state}.,クラウド接続に問題があります：{state}。
+doctor.finding_conn_stuck,云端连接已超过 {minutes} 分钟未恢复。,The cloud connection has not recovered for {minutes} minutes.,クラウド接続が {minutes} 分以上回復していません。
+doctor.finding_plugin_capped,{name} 多次启动失败，已停止自动重启。,{name} failed to start repeatedly; automatic restarts have stopped.,{name} の起動に繰り返し失敗したため、自動再起動を停止しました。
+doctor.finding_plugin_flapping,{name} 运行不稳定，最近反复退出。,{name} is unstable and recently exited repeatedly.,{name} は不安定で、最近繰り返し終了しています。
+doctor.finding_lease_stale,{name} 存在过期的运行时租约。,{name} has a stale runtime lease.,{name} に期限切れのランタイムリースがあります。
+doctor.finding_lease_cleaned,已自动清理 {name} 的过期运行时租约。,Cleaned up a stale runtime lease for {name} automatically.,{name} の期限切れランタイムリースを自動削除しました。
+doctor.finding_install_state,{name} 安装状态异常。,{name} has an invalid install state.,{name} のインストール状態が異常です。
+doctor.finding_active_version,{name} 活跃版本可能损坏，无法被发现。,{name}'s active version may be broken and cannot be discovered.,{name} の有効バージョンが破損しており、検出できません。
+doctor.finding_node_missing,Node 运行时缺失，依赖它的插件将无法启动。,The Node runtime is missing; plugins that need it cannot start.,Node ランタイムがないため、必要とするプラグインを起動できません。
+doctor.finding_catalog_stale,插件目录缓存已 {days} 天未更新。,The plugin catalog cache has not updated for {days} days.,プラグインカタログのキャッシュが {days} 日間更新されていません。
+doctor.finding_managed_cdp,{name} 正在运行，但控制通道不可达。,{name} is running but its control channel is unreachable.,{name} は実行中ですが、制御チャネルに到達できません。
+doctor.dismiss,忽略,Dismiss,閉じる
+doctor.confirm_title,确认修复,Confirm fix,修復の確認
+doctor.remedy_run,修复,Fix,修復
+doctor.remedy_applied,修复已执行,Fix applied,修復を実行しました
+doctor.escalated,自动恢复未成功,Auto-heal exhausted,自動修復に失敗しました
+doctor.auto_healed,已自动恢复,Automatically recovered,自動的に復旧しました
+doctor.impact_default,该操作可能影响正在运行的任务。,This action may affect running tasks.,この操作は実行中のタスクに影響する場合があります。
+doctor.remedy_config_repair,备份并修复配置,Back up and repair configuration,バックアップして設定を修復
+doctor.remedy_plugin_restart,重启插件,Restart plugin,プラグインを再起動
+doctor.remedy_rollback,回滚到上一版本,Roll back to previous version,前のバージョンに戻す
+doctor.remedy_node_install,重新下载 Node 运行时,Reinstall Node runtime,Node ランタイムを再ダウンロード
+doctor.remedy_catalog_refresh,刷新插件目录,Refresh plugin catalog,プラグインカタログを更新
+doctor.remedy_relaunch,重新托管应用,Relaunch managed app,管理アプリを再起動
+doctor.remedy_log_clean,清理旧日志,Clean old logs,古いログを削除
+doctor.impact_config_repair,将备份原配置文件，并按当前版本支持的字段重建；未识别的自定义字段会被移除。,The original file will be backed up and rebuilt with supported fields; unrecognized custom fields will be removed.,元のファイルをバックアップし、対応するフィールドで再構築します。認識されないフィールドは削除されます。
+doctor.impact_plugin_restart,{name} 正在运行，重启会中断进行中的任务。,{name} is running; restarting interrupts in-progress tasks.,{name} は実行中のため、再起動すると進行中のタスクが中断されます。
+doctor.impact_rollback,{name} 将回退到上一版本，正在运行的会话会中断。,{name} will roll back to its previous version; running sessions are interrupted.,{name} を前のバージョンに戻します。実行中のセッションは中断されます。
+doctor.impact_relaunch,将重启 {name} 应用，正在进行的任务会被中断。,{name} will be restarted; in-progress tasks are interrupted.,{name} を再起動します。進行中のタスクは中断されます。
+doctor.impact_log_clean,将删除 24 小时前的旧日志文件。,Log files older than 24 hours will be deleted.,24 時間より古いログファイルを削除します。
+doctor.hint_config_parse,可尝试一键修复：先自动备份原文件，再按支持的字段重建；修复后建议重启 Hub。,Try the one-click repair: the original file is backed up first and then rebuilt with supported fields. Restarting the Hub afterwards is recommended.,ワンクリック修復を試せます：元のファイルをバックアップした後、対応フィールドで再構築します。修復後の Hub 再起動をおすすめします。
+doctor.hint_plugin_capped,插件多次启动失败后已停止自动重启；Doctor 会自动重启恢复，也可手动一键重启。,The plugin stopped auto-restarting after repeated failures; doctor restarts it automatically or use the one-click restart.,プラグインは繰り返しの起動失敗で自動再起動を停止しました。Doctor が自動で再起動します。
+doctor.hint_plugin_flapping,插件最近反复退出，通常会自动恢复；持续出现时可手动重启。,The plugin exited repeatedly and usually recovers on its own; restart it manually if this persists.,プラグインが繰り返し終了しています。通常は自動復旧しますが、続く場合は再起動してください。
+doctor.hint_active_version,当前版本可能损坏；Doctor 会尝试回滚到上一版本恢复使用。,The active version may be broken; doctor can roll back to the previous version.,現行バージョンが破損している可能性があります。前のバージョンに戻せます。
+doctor.hint_install_state,安装记录异常。建议在插件管理中卸载后重新安装 {name}。,The install state is invalid. Uninstall and reinstall {name} from plugin management.,インストール状態が異常です。プラグイン管理で {name} を再インストールしてください。
+doctor.hint_node,Node 运行时缺失会阻止插件启动；Doctor 会自动重新下载。,A missing Node runtime blocks plugin startup; doctor re-downloads it automatically.,Node ランタイムがないとプラグインを起動できません。Doctor が自動で再ダウンロードします。
+doctor.hint_catalog,目录缓存长期未更新，通常是网络问题；Doctor 会自动刷新。,The catalog cache has not updated for a long time (usually a network issue); doctor refreshes it automatically.,カタログキャッシュが長期間更新されていません。通常はネットワークの問題で、Doctor が自動更新します。
+doctor.hint_managed,应用在运行但控制通道不可达；可重新托管恢复远程控制。,The app is running but its control channel is unreachable; relaunch managed mode to restore remote control.,アプリは実行中ですが制御チャネルに接続できません。再ホストで復旧できます。
+doctor.hint_reauth,登录凭证已失效，请退出后在登录页重新登录。,Your login expired; log out and sign in again on the login page.,ログインの有効期限が切れました。ログアウト後、再度ログインしてください。
+doctor.hint_gateway,云端网关拒绝了连接，通常稍后自动恢复；持续出现请检查网络。,The cloud gateway rejected the connection and usually recovers shortly; check the network if it persists.,クラウドゲートウェイに拒否されました。通常はまもなく復旧します。
+doctor.hint_network,连接长时间未恢复，请检查本机网络后点击「刷新连接」。,The connection has not recovered for a while; check the network and use 'Refresh connection'.,接続が長時間回復していません。ネットワークを確認し「接続を更新」してください。
+doctor.hint_db,本地数据库不可用。请确认磁盘可写、文件未被占用。,The local database is unavailable. Check that the disk is writable and the file is not in use.,ローカルデータベースが利用できません。ディスクの書き込み可否を確認してください。
+doctor.hint_disk,磁盘剩余空间不足，请清理磁盘后重试。,Free up disk space and retry.,ディスクの空き容量を確保して再試行してください。
+doctor.hint_logs,日志占用过大，可一键清理 24 小时前的旧日志。,Logs are large; clean files older than 24 hours with one click.,ログの容量が大きくなっています。24 時間より古いログを削除できます。
+doctor.history_title,最近处理,Recent activity,最近の処理
+doctor.history_empty,暂无处理记录,No activity yet,処理履歴はありません
+doctor.history_auto,自动恢复,Auto-heal,自動復旧
+doctor.history_manual,手动修复,Manual fix,手動修復
+doctor.history_dismissed,已忽略,Dismissed,無視
+doctor.history_system,系统,System,システム
+doctor.history_success,成功,Success,成功
+doctor.history_failed,失败,Failed,失敗
+doctor.history_rejected,已取消,Cancelled,キャンセル済み
+doctor.history_escalated,已升级为手动,Escalated to manual,手動にエスカレーション
+login.signing_in,正在登录并绑定设备…,Signing in and linking this device…,ログインしてデバイスを連携中…
+login.success,登录成功,Signed in,ログインしました
+login.starting_hub,正在启动 Hub 并连接服务器…,Starting Hub and connecting to the server…,Hub を起動してサーバーに接続中…
+login.startup_delayed,登录已成功，但 Hub 连接尚未就绪。请检查上方连接状态或点击刷新连接。,Signed in but Hub is not ready yet. Check the connection status above or refresh the connection.,ログイン済みですが Hub の接続がまだ完了していません。上部の接続状態を確認するか接続を更新してください。

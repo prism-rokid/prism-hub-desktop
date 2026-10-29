@@ -1,0 +1,63 @@
+# Prism sample configuration.
+# Usually you do not need to hand-edit this file: `prism login` writes account
+# identity, and `prism dashboard` edits plugin/daemon settings.
+
+prism:
+  # cn | global
+  region: cn
+  # Filled by `prism login` / dashboard. Leave empty in samples.
+  host_token: ""
+
+# Filled by `prism login`. Keep this block empty in a checked-in sample.
+account: {}
+
+bridge:
+  enabled: true
+  # Keep the desktop awake while Prism remote control is active. Currently
+  # implemented on macOS via caffeinate, and on Linux via systemd-inhibit when
+  # available.
+  keep_awake: false
+  # Optional. When unset, the phone/API request should specify the Plugin.
+  # Use the real local Plugin ID, for example: codex
+
+  # Installed plugin roots. `prism plugin install` defaults to this directory.
+  plugin_dirs:
+    - ~/.prism/pluginbridge-plugins
+
+  # Env passed to every plugin process. Sensitive/reserved keys such as
+  # PRISM_HOST_TOKEN, PRISM_CONFIG and PRISM_PLUGIN_* are filtered.
+  plugin_env:
+    # PRISM_SQLITE3_BIN: /opt/homebrew/bin/sqlite3
+
+  # Per-plugin settings. Keys must be real Plugin IDs, not family names.
+  # Official examples:
+  plugins:
+    # codex:
+    #   enabled: true
+    #   # Defaults to all_threads so desktop-side model/reasoning/approval
+    #   # changes can update the active conversation snapshot.
+    #   # reverse_sync: all_threads # off | prism_managed_only | all_threads
+    #   env:
+    #     PRISM_PLUGIN_MANAGED_LAUNCH: "1"
+    #     # PRISM_CODEX_CDP_PORT: "9222"
+    #     # New Codex builds may be hosted by ChatGPT.app; Prism detects
+    #     # /Applications/Codex.app and /Applications/ChatGPT.app by default.
+    #     # PRISM_CODEX_APP_PATH: /Applications/ChatGPT.app/Contents/MacOS/ChatGPT
+    # Every Plugin uses the same manifest-validated runtime selector. A Plugin
+    # with one runtime still receives its default automatically; set mode only
+    # when the manifest declares more than one runtime.
+    # hermes:
+    #   enabled: true
+    #   # desktop (default): Hermes Desktop + CDP/Gateway
+    #   # acp: Hub-managed `hermes acp`, no Desktop required
+    #   mode: desktop # Valid values come from that Plugin's runtime_modes.
+    #   env:
+    #     # Never enable automatic Hermes relaunch for ordinary use. Start it
+    #     # explicitly from Prism Desktop; these switches are developer-only.
+    #     # PRISM_HERMES_ALLOW_MANAGED_LAUNCH: "1"
+    #     # PRISM_HERMES_ALLOW_MANAGED_RELAUNCH: "1"
+    # openclaw:
+    #   enabled: true
+    #   reverse_sync: all_threads # off | prism_managed_only | all_threads
+    #   env:
+    #     OPENCLAW_GATEWAY_URL: auto

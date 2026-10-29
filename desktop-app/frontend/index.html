@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prism Hub</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <iframe id="dashboard" title="Prism Hub Dashboard"></iframe>
+    <section id="update-dialog" class="update-dialog" aria-live="polite" aria-hidden="true">
+      <div class="update-dialog__panel" role="dialog" aria-modal="true" aria-labelledby="update-title">
+        <p class="update-dialog__eyebrow">PRISM HUB</p>
+        <h1 id="update-title">发现新版本</h1>
+        <p id="update-detail">正在检查更新。</p>
+        <div class="update-dialog__progress" id="update-progress" aria-hidden="true">
+          <div class="update-dialog__progress-fill" id="update-progress-fill"></div>
+        </div>
+        <div class="update-dialog__actions">
+          <button id="update-later" class="update-dialog__secondary" type="button">稍后更新</button>
+          <button id="update-install" class="update-dialog__primary" type="button">立即更新</button>
+        </div>
+      </div>
+    </section>
+    <div id="update-toast" class="update-toast" role="status" aria-live="polite" aria-hidden="true">
+      <span class="update-toast__icon" id="update-toast-icon" aria-hidden="true"></span>
+      <span class="update-toast__copy"><strong id="update-toast-title"></strong><span id="update-toast-detail"></span></span>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

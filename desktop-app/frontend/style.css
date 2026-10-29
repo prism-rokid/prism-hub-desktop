@@ -1,0 +1,200 @@
+:root {
+  color-scheme: light;
+  --shell-canvas: #f7f7fa;
+  --shell-surface: #fff;
+  --shell-ink: #1f2328;
+  --shell-muted: #68707c;
+  --shell-line: #e4e7eb;
+  --shell-line-strong: #d7dbe0;
+  --shell-accent: #526cff;
+  --shell-shadow: 0 16px 40px rgb(15 19 24 / 16%);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --shell-canvas: #0c1015;
+  --shell-surface: #1a222b;
+  --shell-ink: #f3f6f8;
+  --shell-muted: #aab3be;
+  --shell-line: #29333e;
+  --shell-line-strong: #34404c;
+  --shell-accent: #7587ff;
+  --shell-shadow: 0 16px 40px rgb(0 0 0 / 28%);
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--shell-canvas);
+  color: var(--shell-ink);
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#dashboard {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.update-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(12 16 21 / 35%);
+}
+
+.update-dialog[aria-hidden="true"] {
+  display: none;
+}
+
+.update-dialog__panel {
+  width: min(100%, 420px);
+  box-sizing: border-box;
+  padding: 22px;
+  border: 1px solid var(--shell-line-strong);
+  border-radius: 14px;
+  background: var(--shell-surface);
+  box-shadow: var(--shell-shadow);
+  color: var(--shell-ink);
+}
+
+.update-dialog__eyebrow {
+  margin: 0 0 7px;
+  color: var(--shell-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+
+.update-dialog h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+  line-height: 1.35;
+}
+
+.update-dialog__panel > p:not(.update-dialog__eyebrow) {
+  margin: 10px 0 0;
+  color: var(--shell-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.update-dialog__progress {
+  display: block;
+  height: 4px;
+  margin-top: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--shell-line-strong);
+}
+
+.update-dialog__progress[aria-hidden="true"] {
+  display: none;
+}
+
+.update-dialog__progress-fill {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--shell-accent, #526cff);
+  transition: width .2s ease;
+}
+
+.update-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.update-dialog button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .16s ease, border-color .16s ease, transform .16s ease;
+}
+
+.update-dialog button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.update-dialog button:not(:disabled):active { transform: scale(.98); }
+
+.update-dialog__secondary {
+  border-color: var(--shell-line-strong);
+  background: transparent;
+  color: var(--shell-ink);
+}
+
+.update-dialog__secondary:not(:disabled):hover { background: var(--shell-canvas); }
+
+.update-dialog__primary {
+  border-color: var(--shell-accent);
+  background: var(--shell-accent);
+  color: #fff;
+}
+
+.update-toast {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  z-index: 10;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100% - 36px);
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgb(25 27 30 / 94%);
+  box-shadow: 0 8px 24px rgb(15 19 24 / 22%);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  opacity: 1;
+  transform: translate(-50%, 0);
+  transition: opacity .18s ease, transform .18s ease;
+}
+
+.update-toast[aria-hidden="true"] {
+  display: none;
+}
+
+.update-toast__icon {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ff9f9f;
+  color: #241719;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 16px;
+  text-align: center;
+}
+
+.update-toast[data-tone="ok"] .update-toast__icon {
+  background: #65d9a5;
+  color: #102a20;
+}
+
+.update-toast__copy { display: grid; gap: 1px; min-width: 0; }
+.update-toast__copy strong { font-size: 12px; font-weight: 650; }
+.update-toast__copy span { color: rgb(255 255 255 / 76%); }

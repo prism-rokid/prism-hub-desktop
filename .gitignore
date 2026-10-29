@@ -1,0 +1,129 @@
+# Binaries
+ai-pac
+/prism
+/rokid-prism-hub
+bin/
+!plugins/codex.automation/bin/
+plugins/codex.automation/bin/*
+!plugins/codex.automation/bin/*.swift
+*.exe
+*.dll
+*.so
+*.dylib
+*.sqlite
+/main-*.js
+
+# Go build cache
+.gocache/
+.gotmp/
+coverage/
+
+# Test artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+/.playwright-cli/
+/output/
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Config with secrets
+config.yaml
+!config.sample.yaml
+
+# Data directories
+data/
+logs/
+*.log
+tmp/
+.tmp/
+.prism-attachments/
+
+# Temporary directories
+.e2e-home/
+.kiro/
+.tmp-ai-pac/
+.tmp-rokid-prism-hub/
+
+# Vendored dependencies
+third_party/
+internal/web/static/vendor/
+vendor/runtime/
+
+# Desktop shell artifacts
+desktop-shell/
+desktop-shell/node_modules/
+desktop-shell/src-tauri/target/
+desktop-shell/resources/
+desktop-shell/dist/
+desktop-shell/.tauri/
+desktop-shell/.runtime-cache/
+desktop-shell/runtime/
+
+# Tauri desktop application artifacts
+desktop-app/node_modules/
+desktop-app/src-tauri/target/
+desktop-app/src-tauri/gen/
+desktop-app/resources/
+
+# Local desktop release packages
+/desktop-app/release/
+
+# SDK / plugin build & install artifacts (apply anywhere in the tree)
+node_modules/
+dist/
+.vite/
+
+# Node tooling caches and generated metadata
+.cache/
+.npm/
+.pnpm-store/
+.turbo/
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Browser test artifacts
+playwright-report/
+test-results/
+
+# Local environment and signing material
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.key
+*.pem
+*.p12
+
+# Locally packed Node modules
+*.tgz
+# Python SDK: virtualenv + caches
+.venv/
+.pytest_cache/
+
+# Shared runtime build cache
+.runtime-cache/
+/runtime/
+
+# Runtime state
+.rokid-prism-hub/
+.ai-pac/
+.codex/
+.hermes/
+.zcode/
+mobile-companion-link
+
+# OS files
+Thumbs.db
