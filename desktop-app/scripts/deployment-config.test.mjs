@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { deploymentEnvironment, desktopProductName } from "./deployment-config.mjs";
 
-test("only an explicit deployment environment is accepted", () => {
-  assert.throws(() => deploymentEnvironment([]), /missing or invalid/);
+test("the online deployment is the default", () => {
+  assert.equal(deploymentEnvironment([]), "prod");
   assert.throws(() => deploymentEnvironment(["--environment", "staging"]), /missing or invalid/);
   assert.throws(() => deploymentEnvironment(["--environment"]), /missing or invalid/);
 });

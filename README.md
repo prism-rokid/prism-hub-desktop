@@ -26,17 +26,46 @@ Build the Hub sidecar:
 go build -o ./bin/prism-sidecar ./cmd/prism
 ```
 
-Build Prism Desktop from the repository root:
+Build the Prism Desktop app from `desktop-app/`:
 
 ```sh
 cd desktop-app
 npm ci
-npm run build:prod
+PRISM_SKIP_CODESIGN=1 PRISM_BUNDLES=app npm run build
 ```
 
-The checked-in deployment configuration contains production endpoints. Desktop builds require network access to Prism services. Signing and notarization are only needed when distributing installers to end users.
+The open-source branch uses its checked-in online service configuration. No
+endpoint override is needed. Desktop builds require network access to Prism
+services. Signing and notarization are only needed when distributing installers
+to end users.
 
 ## Development
+
+From `desktop-app/`, install dependencies once and start Tauri in development
+mode. The command rebuilds the Go sidecar with the online service configuration
+before starting the desktop shell:
+
+```sh
+cd desktop-app
+npm ci
+npm run dev
+```
+
+### Package the desktop app locally
+
+On macOS, build a runnable app without signing or creating a DMG:
+
+```sh
+cd desktop-app
+PRISM_SKIP_CODESIGN=1 PRISM_BUNDLES=app npm run build
+```
+
+The generated app is under
+`desktop-app/src-tauri/target/release/bundle/` for the current platform. A
+signed installer requires platform signing and notarization configured by the
+release owner.
+
+### Checks
 
 Run the maintained Hub test suite from the repository root:
 

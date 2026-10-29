@@ -21,7 +21,7 @@ export function desktopProductName(environment) {
 
 export function deploymentEnvironment(argv = process.argv.slice(2)) {
   const index = argv.indexOf("--environment");
-  const value = index >= 0 ? argv[index + 1] : "";
+  const value = index >= 0 ? argv[index + 1] : "prod";
   const environment = String(value ?? "").trim().toLowerCase();
   if (!allowedEnvironments.has(environment)) {
     throw new Error("missing or invalid --environment; use dev, test, or prod");

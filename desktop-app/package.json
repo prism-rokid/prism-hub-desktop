@@ -5,12 +5,8 @@
   "type": "module",
   "scripts": {
     "prepare:sidecar": "node ./scripts/prepare-sidecar.mjs",
-    "dev": "node ./scripts/dev-desktop.mjs --environment dev",
-    "dev:test": "node ./scripts/dev-desktop.mjs --environment test",
+    "dev": "node ./scripts/dev-desktop.mjs",
     "build": "node ./scripts/build-desktop.mjs",
-    "build:dev": "node ./scripts/build-desktop.mjs --environment dev",
-    "build:test": "node ./scripts/build-desktop.mjs --environment test",
-    "build:prod": "node ./scripts/build-desktop.mjs --environment prod",
     "sign:macos:bundle": "node ./scripts/sign-macos-bundle.mjs",
     "check": "node --test ./scripts/deployment-config.test.mjs && node --check ./scripts/deployment-config.mjs && node --check ./scripts/dev-desktop.mjs && node --check ./scripts/prepare-sidecar.mjs && node --check ./scripts/sanitize-macos-bundle-inputs.mjs && node --check ./scripts/build-desktop.mjs && node --check ./scripts/hide-dmg-volume-icon.mjs && node --check ./scripts/sign-macos-bundle.mjs && node --check ./frontend/app.js"
   },
