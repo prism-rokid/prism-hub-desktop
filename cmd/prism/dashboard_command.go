@@ -2788,7 +2788,7 @@ func dashboardDesktopProcessesWithError(spec dashboardDesktopAppSpec) ([]map[str
 		items := make([]map[string]any, 0, len(rows))
 		for _, row := range rows {
 			command := strings.TrimSpace(row.CommandLine)
-			if row.ProcessID <= 0 || !dashboardWindowsDesktopProcessIsMain(spec, row.Name, row.ExecutablePath) {
+			if row.ProcessID <= 0 || !dashboardWindowsDesktopProcessIsMain(spec, row.Name, row.ExecutablePath) || strings.Contains(strings.ToLower(command), "--type=") {
 				continue
 			}
 			items = append(items, map[string]any{"pid": row.ProcessID, "command": command})
@@ -2840,21 +2840,31 @@ func dashboardWindowsListeningPorts(pid int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var values []string
+	return dashboardWindowsListeningPortsFromJSON(out)
+}
+
+func dashboardWindowsListeningPortsFromJSON(out []byte) ([]string, error) {
 	trimmed := strings.TrimSpace(string(out))
 	if trimmed == "" {
 		return nil, nil
 	}
+	// PowerShell serializes LocalPort as a number, or an array of numbers
+	// when the process owns multiple listeners (including ephemeral CDP ports).
+	var numbers []int
 	if strings.HasPrefix(trimmed, "[") {
-		if err := json.Unmarshal(out, &values); err != nil {
+		if err := json.Unmarshal(out, &numbers); err != nil {
 			return nil, err
 		}
 	} else {
-		var value any
+		var value int
 		if err := json.Unmarshal(out, &value); err != nil {
 			return nil, err
 		}
-		values = append(values, fmt.Sprint(value))
+		numbers = append(numbers, value)
+	}
+	values := make([]string, 0, len(numbers))
+	for _, number := range numbers {
+		values = append(values, strconv.Itoa(number))
 	}
 	return values, nil
 }
