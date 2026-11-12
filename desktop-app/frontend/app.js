@@ -116,10 +116,15 @@ async function invoke(command, args) {
 }
 
 function dashboardURL({ reload = false } = {}) {
-  if (!reload) return hubURL;
+  const url = new URL(hubURL);
+  // 自定义 Tauri 协议下 WebKit 可能省略 document.referrer。
+  // 显式传递 Shell 来源，以便校验目录选择回复的来源。
+  url.searchParams.set("desktop_origin", window.location.origin);
+  if (!reload) return url.href;
   // A restart reuses the same localhost URL. Give the WebView a distinct
   // navigation so it cannot retain the failed document from the old sidecar.
-  return `${hubURL}?desktop_restart=${Date.now()}`;
+  url.searchParams.set("desktop_restart", String(Date.now()));
+  return url.href;
 }
 
 async function startDashboard({ reload = false } = {}) {
@@ -356,11 +361,20 @@ updateLater.addEventListener("click", hideUpdateDialog);
 updateInstall.addEventListener("click", () => void installDesktopUpdate());
 
 window.addEventListener("message", async (event) => {
-  if (event.origin !== new URL(hubURL).origin) {
+  if (event.source !== dashboard.contentWindow || event.origin !== new URL(hubURL).origin) {
     return;
   }
   try {
-    if (event.data?.type === "prism:theme-change") {
+    if (event.data?.type === "prism:choose-agent-folder") {
+      const requestId = String(event.data.requestId || "");
+      if (!/^[a-zA-Z0-9-]{1,80}$/.test(requestId)) return;
+      try {
+        const path = await invoke("choose_agent_folder");
+        event.source.postMessage({ type: "prism:agent-folder-result", requestId, path }, event.origin);
+      } catch (error) {
+        event.source.postMessage({ type: "prism:agent-folder-result", requestId, error: String(error) }, event.origin);
+      }
+    } else if (event.data?.type === "prism:theme-change") {
       applyShellTheme(event.data.theme);
     } else if (event.data?.type === "prism:locale-change") {
       setShellLocale(String(event.data.locale || ""));

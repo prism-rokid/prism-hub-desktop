@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	"rokid-prism-hub/internal/agentlocation"
 	"rokid-prism-hub/internal/buildinfo"
 	"rokid-prism-hub/internal/host"
 )
@@ -132,20 +133,21 @@ type SummaryConfig struct {
 }
 
 type PluginConfig struct {
-	Mode               string            `yaml:"mode,omitempty"`
-	ReverseSync        string            `yaml:"reverse_sync,omitempty"`
-	Source             string            `yaml:"source,omitempty"`
-	GatewayURL         string            `yaml:"gateway_url,omitempty"`
-	Discovery          string            `yaml:"discovery,omitempty"`
-	ServerURL          string            `yaml:"server_url,omitempty"`
-	Command            string            `yaml:"command,omitempty"`
-	SocketPath         string            `yaml:"socket_path,omitempty"`
-	UseTUIEndpoint     bool              `yaml:"use_tui_endpoint,omitempty"`
-	ChannelName        string            `yaml:"channel_name,omitempty"`
-	Beta               bool              `yaml:"beta,omitempty"`
-	VisibilityRequired bool              `yaml:"visibility_required"`
-	Uninstalling       bool              `yaml:"uninstalling,omitempty"`
-	Env                map[string]string `yaml:"env,omitempty"`
+	Locations          map[string]agentlocation.LocationSelection `yaml:"locations,omitempty"`
+	Mode               string                                     `yaml:"mode,omitempty"`
+	ReverseSync        string                                     `yaml:"reverse_sync,omitempty"`
+	Source             string                                     `yaml:"source,omitempty"`
+	GatewayURL         string                                     `yaml:"gateway_url,omitempty"`
+	Discovery          string                                     `yaml:"discovery,omitempty"`
+	ServerURL          string                                     `yaml:"server_url,omitempty"`
+	Command            string                                     `yaml:"command,omitempty"`
+	SocketPath         string                                     `yaml:"socket_path,omitempty"`
+	UseTUIEndpoint     bool                                       `yaml:"use_tui_endpoint,omitempty"`
+	ChannelName        string                                     `yaml:"channel_name,omitempty"`
+	Beta               bool                                       `yaml:"beta,omitempty"`
+	VisibilityRequired bool                                       `yaml:"visibility_required"`
+	Uninstalling       bool                                       `yaml:"uninstalling,omitempty"`
+	Env                map[string]string                          `yaml:"env,omitempty"`
 }
 
 func Default() *Config {

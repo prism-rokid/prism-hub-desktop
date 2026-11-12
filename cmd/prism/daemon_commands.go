@@ -10,12 +10,14 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"rokid-prism-hub/internal/agentlocation"
 	prismapi "rokid-prism-hub/internal/api"
 	"rokid-prism-hub/internal/bridge"
 	bridgeconfig "rokid-prism-hub/internal/config"
@@ -25,6 +27,7 @@ import (
 	pluginpkg "rokid-prism-hub/internal/plugin"
 	"rokid-prism-hub/internal/pluginruntime"
 	prismtransport "rokid-prism-hub/internal/realtime"
+	"rokid-prism-hub/internal/runtimes"
 )
 
 type conversationHistoryRelay struct {
@@ -238,6 +241,7 @@ func runBridgeRuntime(parent context.Context, cfg *bridgeconfig.Config, db *pris
 	detailSnapshots := bridge.NewDetailSnapshotStore()
 	service := newBridgeServiceFromConfig(cfg)
 	setDashboardRuntimePlugins(service)
+	defer stopManagedAgentServices()
 	defer func() {
 		if currentDashboardRuntimePlugins() == service {
 			setDashboardRuntimePlugins(nil)
@@ -630,7 +634,7 @@ func handleDesktopLaunch(ctx context.Context, client *prismtransport.Client, con
 						}
 					}
 				}
-			} else if err := startManagedService(ctx, *manifest, spec, publisher); err != nil {
+			} else if err := startManagedService(ctx, *manifest, spec, publisher, cfg); err != nil {
 				response.Code = "desktop_launch_failed"
 				response.Message = err.Error()
 			} else {
@@ -683,18 +687,65 @@ func selectLaunchSpec(manifest pluginpkg.Manifest, configuredMode, launchKind st
 	return specs[0], nil
 }
 
-// startManagedService executes a manifest-declared service launch target:
-// the start argv runs directly (PATH-resolved, never a shell) with the spec's
-// ready policy as success contract — exit_ok accepts a zero exit, probe polls
-// the plugin's live availability until the ready timeout.
-func startManagedService(ctx context.Context, manifest pluginpkg.Manifest, spec pluginpkg.ManagedLaunchSpec, publisher *bridge.SnapshotPublisher) error {
+// startManagedService 使用与插件发现相同的已定位可执行文件。
+// exit_ok 等待启动器结束；probe 还支持就绪请求完成后继续运行的前台服务。
+func startManagedService(ctx context.Context, manifest pluginpkg.Manifest, spec pluginpkg.ManagedLaunchSpec, publisher *bridge.SnapshotPublisher, configs ...*bridgeconfig.Config) error {
+	service := currentDashboardRuntimePlugins()
+	if publisher != nil {
+		service = publisher.Service
+	}
+	if spec.Ready == pluginpkg.LaunchReadyProbe {
+		if service == nil {
+			return fmt.Errorf("plugin runtime is unavailable for service readiness")
+		}
+		if available, _ := probeManagedService(ctx, service, manifest.ID); available {
+			return nil
+		}
+	}
 	bin, err := exec.LookPath(spec.Start[0])
+	if len(configs) > 0 && configs[0] != nil {
+		cfg := configs[0]
+		mode := manifest.RuntimeMode(cfg.Bridge.Plugins[manifest.ID].Mode)
+		if _, supported := agentlocation.Lookup(manifest.ID, mode); supported {
+			loc, locErr := resolveAgentLocation(ctx, cfg, manifest.ID, mode)
+			if locErr != nil {
+				return locErr
+			}
+			bin = loc.Executable
+			err = nil
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("launch command %q not found in PATH", spec.Start[0])
 	}
-	runCtx, cancel := context.WithTimeout(ctx, time.Duration(spec.ReadyTimeoutMs)*time.Millisecond)
+	timeout := time.Duration(spec.ReadyTimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, bin, spec.Start[1:]...)
+	commandCtx := runCtx
+	if spec.Ready == pluginpkg.LaunchReadyProbe {
+		commandCtx = context.Background()
+	}
+	cmd, err := agentlocation.Command(commandCtx, bin, spec.Start[1:]...)
+	if err != nil {
+		return err
+	}
+	if len(configs) > 0 && configs[0] != nil {
+		env, envErr := locatedServiceEnvironment(runCtx, configs[0], manifest, bin)
+		if envErr != nil {
+			return envErr
+		}
+		cmd.Env = env
+	}
+	if spec.Ready == pluginpkg.LaunchReadyProbe {
+		running, created, startErr := startTrackedAgentService(manifest.ID, cmd)
+		if startErr != nil {
+			return startErr
+		}
+		return waitManagedAgentService(runCtx, service, manifest.ID, running, created)
+	}
 	output, runErr := cmd.CombinedOutput()
 	if runErr != nil {
 		detail := strings.TrimSpace(string(output))
@@ -709,31 +760,7 @@ func startManagedService(ctx context.Context, manifest pluginpkg.Manifest, spec 
 		}
 		return fmt.Errorf("launch command failed: %s", detail)
 	}
-	if spec.Ready == pluginpkg.LaunchReadyExitOK {
-		return nil
-	}
-	// Ready policy "probe": the launch only counts when the plugin itself
-	// reports Available (that is what restores remote control).
-	if publisher == nil || publisher.Service == nil {
-		return nil
-	}
-	deadline := time.Now().Add(time.Duration(spec.ReadyTimeoutMs) * time.Millisecond)
-	adapter := publisher.Service.Adapter(manifest.ID)
-	for {
-		if adapter != nil {
-			if status := publisher.Service.AdapterStatus(ctx, manifest.ID, adapter); status.Available {
-				return nil
-			}
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("service started, but plugin %s did not become available within %dms", manifest.ID, spec.ReadyTimeoutMs)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
+	return nil
 }
 
 func handlePluginRuntimeSwitch(ctx context.Context, client *prismtransport.Client, configPath string, reloader *pluginpkg.Reloader, publisher *bridge.SnapshotPublisher, in prismtransport.Inbound) error {
@@ -1686,6 +1713,12 @@ func bridgePluginEnv(cfg *bridgeconfig.Config, item pluginpkg.Discovered) map[st
 			}
 		}
 	}
+	for key, value := range agentLocationEnv(context.Background(), cfg, item.Manifest) {
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[key] = value
+	}
 	// Desktop-automation plugins shell out to the sqlite3 CLI to read local
 	// app state. Resolve it from PATH so they work without a manual
 	// PRISM_SQLITE3_BIN configuration.
@@ -1695,6 +1728,54 @@ func bridgePluginEnv(cfg *bridgeconfig.Config, item pluginpkg.Discovered) map[st
 		}
 	}
 	return out
+}
+
+// 服务启动必须使用与发现阶段相同的插件环境。
+// 即使 GUI 的 PATH 没有 Node，也要为 npm shim 提供 Hub 自带的 Node 运行时。
+func locatedServiceEnvironment(ctx context.Context, cfg *bridgeconfig.Config, manifest pluginpkg.Manifest, bin string) ([]string, error) {
+	values := map[string]string{}
+	for _, entry := range os.Environ() {
+		if key, value, ok := strings.Cut(entry, "="); ok {
+			values[key] = value
+		}
+	}
+	for key, value := range bridgePluginEnv(cfg, pluginpkg.Discovered{Manifest: manifest}) {
+		values[key] = value
+	}
+	pathValue := firstNonEmpty(values["PATH"], values["Path"])
+	dirs := []string{filepath.Dir(bin)}
+	node := runtimes.NewNodeManager("", nil).Binary()
+	if _, err := os.Stat(node); err == nil {
+		dirs = append(dirs, filepath.Dir(node))
+	} else {
+		lower := strings.ToLower(bin)
+		needsNode := strings.HasSuffix(lower, ".cmd") || strings.HasSuffix(lower, ".bat")
+		if file, err := os.Open(bin); err == nil {
+			data := make([]byte, 128)
+			n, _ := file.Read(data)
+			file.Close()
+			needsNode = needsNode || (strings.HasPrefix(string(data[:n]), "#!") && strings.Contains(strings.SplitN(string(data[:n]), "\n", 2)[0], "node"))
+		}
+		if needsNode {
+			resolved, err := runtimes.NewNodeManager("", nil).Ensure(ctx)
+			if err != nil {
+				return nil, err
+			}
+			dirs = append(dirs, filepath.Dir(resolved))
+		}
+	}
+	dirs = append(dirs, pathValue)
+	for key := range values {
+		if strings.EqualFold(key, "PATH") {
+			delete(values, key)
+		}
+	}
+	values["PATH"] = strings.Join(dirs, string(os.PathListSeparator))
+	out := make([]string, 0, len(values))
+	for key, value := range values {
+		out = append(out, key+"="+value)
+	}
+	return out, nil
 }
 
 func mergePluginEnv(dst map[string]string, src map[string]string) map[string]string {

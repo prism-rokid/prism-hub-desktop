@@ -1227,6 +1227,22 @@
       margin-top: 24px;
     }
 
+    .login-form[aria-busy="true"] {
+      pointer-events: none;
+    }
+
+    .login-form[aria-busy="true"] .login-input-shell,
+    .login-form[aria-busy="true"] .segment,
+    .login-form[aria-busy="true"] .register-button {
+      opacity: .65;
+    }
+
+    .login-button[aria-busy="true"] .lucide {
+      animation: login-spinner .8s linear infinite;
+    }
+
+    @keyframes login-spinner { to { transform: rotate(360deg); } }
+
     #login-transition-status[hidden] { display: none; }
 
     .segmented {
@@ -1420,7 +1436,7 @@
 
     .page[data-page="dashboard"] {
       overflow-x: hidden;
-      overflow-y: auto;
+      overflow-y: hidden;
       background: #fff;
     }
 
@@ -1625,6 +1641,21 @@
       gap: 8px;
     }
 
+    /* 固定状态栏和区块标题，只让 Agents 内容区在剩余空间内滚动。 */
+    .agent-list-scroll {
+      min-height: 0;
+      display: flex;
+      flex: 1 1 0;
+      flex-direction: column;
+      gap: 12px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: none;
+    }
+
+    .agent-list-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
     .install-panel {
       display: grid;
       flex: 0 0 auto;
@@ -1707,6 +1738,8 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
+      flex: 0 0 auto;
+      min-height: 0;
     }
 
     .agent-card {
@@ -3045,8 +3078,10 @@
             </div>
           </div>
           <span class="message" id="plugins-message" aria-live="polite"></span>
-          <div class="agent-list" id="plugin-local-grid"></div>
-          <ul class="warning-list" id="warnings"></ul>
+          <div class="agent-list-scroll">
+            <div class="agent-list" id="plugin-local-grid"></div>
+            <ul class="warning-list" id="warnings"></ul>
+          </div>
           <span class="compat" id="agent-count">0</span>
           <span class="compat" id="host-name">本机 Host</span>
           <span class="compat" id="host-meta"></span>
@@ -3143,6 +3178,30 @@
       </section>
     </div>
 
+
+    <div class="confirmation-overlay" id="agent-location-overlay" hidden>
+      <section class="confirmation-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-location-title" aria-describedby="agent-location-hint" tabindex="-1">
+        <h2 id="agent-location-title"></h2>
+        <p id="agent-location-hint"></p>
+        <form class="agent-metadata-form" id="agent-location-form">
+          <span id="agent-location-current" class="mono" style="overflow-wrap:anywhere"></span>
+          <label><span data-i18n="location.directory">安装文件夹</span>
+            <input id="agent-location-directory" required autocomplete="off" spellcheck="false">
+          </label>
+          <button class="secondary-button" id="agent-location-browse" type="button" data-i18n="location.browse">选择文件夹</button>
+          <label id="agent-location-candidates-row" hidden><span data-i18n="location.choose_target">选择启动程序</span>
+            <select id="agent-location-candidates" style="width:100%;padding:8px"></select>
+          </label>
+          <p id="agent-location-error" role="alert" style="margin:0;overflow-wrap:anywhere"></p>
+          <div class="confirmation-actions" style="flex-wrap:wrap">
+            <button class="secondary-button" id="agent-location-reset" type="button" data-i18n="location.auto">恢复自动检测</button>
+            <button class="secondary-button" id="agent-location-cancel" type="button" data-i18n="common.cancel">取消</button>
+            <button class="secondary-button confirmation-confirm" id="agent-location-save" type="submit" data-i18n="location.save">保存并连接</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
     <div class="drawer-backdrop" id="drawer-backdrop"></div>
     <aside class="drawer" id="account-drawer" aria-label="账户与应用菜单">
       <div class="drawer-account">
@@ -3201,13 +3260,23 @@
     </div>
   </div>
 
+  <script src="/assets/agent-location.js"></script>
   <script src="https://unpkg.com/lucide@1.27.0/dist/umd/lucide.min.js"></script>
   <script>
     const dashboardTranslations = {{.Translations}};
+    const loginHandoffPending = (() => {
+      try {
+        const pending = sessionStorage.getItem("prism.dashboard.login-handoff") === "1";
+        if (pending) sessionStorage.removeItem("prism.dashboard.login-handoff");
+        return pending;
+      } catch {
+        return false;
+      }
+    })();
     const state = {
       lastStatus: null,
       lastHostPlugins: null,
-      page: "login",
+      page: loginHandoffPending ? "dashboard" : "login",
       region: "cn",
       locale: "en-US",
       theme: "light",
@@ -3231,7 +3300,8 @@
       toastTimer: null,
       reauthRequired: false,
       loginSubmitting: false,
-      loginTransition: false,
+      loginTransition: loginHandoffPending,
+      loginHandoff: loginHandoffPending,
       loginTransitionTimer: null,
       authRevision: 0,
       confirmationResolve: null,
@@ -3544,7 +3614,7 @@
       const pluginId = String(item?.plugin_id || "").trim().toLowerCase();
       const desktopAppId = String(item?.desktop_app_id || pluginId.split(".")[0] || "");
       const desktopCard = desktopAppId ? (data.desktop_apps?.[desktopAppId] || null) : null;
-      const unavailable = Boolean(
+      const unavailable = item?.runtime_status ? item.runtime_status.code !== "ready" : Boolean(
         pluginModeFor(data.config, pluginId) === "desktop" &&
         desktopCard &&
         desktopCard.cdp_reachable === false &&
@@ -3556,9 +3626,9 @@
         pluginId,
         desktopAppId,
         desktopCard,
-        canLaunch: Boolean(item?.managed_launch && desktopCard?.can_launch_managed && !managedWorking),
+        canLaunch: Boolean((item?.current_runtime_mode || pluginModeFor(data.config, pluginId)) === "desktop" && item?.managed_launch && desktopCard?.can_launch_managed && !managedWorking),
         managedWorking,
-        reason: String(desktopCard?.managed_status_message || ""),
+        reason: item?.runtime_status ? agentLocationRuntimeReason(item) : String(desktopCard?.managed_status_message || ""),
       };
     }
 
@@ -3595,22 +3665,22 @@
         if (!recovery.unavailable) continue;
         const name = localPresentation(item, hostPluginFor(recovery.pluginId) || {}).display_name || recovery.pluginId;
         notices.push(recoveryNoticeMarkup({
-          title: t("recovery.agent_interrupted", { name }),
+          title: ["program_not_found", "location_invalid"].includes(item.runtime_status?.code) ? t("location.not_found_title", { name }) : t("recovery.agent_interrupted", { name }),
           detail: recovery.reason || t("recovery.agent_interrupted_detail", { name }),
-          actions: recoveryActionMarkup({
+          actions: (recovery.canLaunch ? recoveryActionMarkup({
             action: "managed-launch",
             key: `managed-launch:${recovery.desktopAppId}`,
             label: t("agent.managed_relaunch"),
             icon: "app-window",
             disabled: !recovery.canLaunch,
             data: { app: recovery.desktopAppId, plugin: recovery.pluginId },
-          }) + recoveryActionMarkup({
+          }) : "") + recoveryActionMarkup({
             action: "agent-refresh",
             key: `agent-refresh:${recovery.pluginId}`,
-            label: t("agent.refresh"),
+            label: t(item.location ? "location.recheck" : "agent.refresh"),
             icon: "refresh-cw",
             data: { plugin: recovery.pluginId },
-          }),
+          }) + agentLocationActionMarkup(item),
         }));
       }
       if (notices.length > 0 && state.recoveryNoticeCount === 0) {
@@ -3865,7 +3935,7 @@
       const runtimeUnavailable = runtimeRecovery.unavailable;
       const runtimeRecoveryAvailable = runtimeRecovery.canLaunch;
       const runtimeRecoveryReason = runtimeRecovery.reason || "当前无法重新托管此 Agent。";
-      const runtimeLabel = t(runtimeUnavailable ? "agent.runtime_unavailable" : "agent.runtime_available");
+      const runtimeLabel = t(item.location_recovery?.state === "connecting" && item.location_recovery.mode === item.current_runtime_mode ? "location.connecting" : (runtimeUnavailable ? "agent.runtime_unavailable" : "agent.runtime_available"));
       const origin = deviceOrigin({
         name: data.local_device_name || data.account?.host_alias || data.account?.host_id,
         address: data.local_device_address || data.hub_url,
@@ -3877,20 +3947,20 @@
           ${recoveryMenuMarkup({
             label: runtimeLabel,
             hint: runtimeRecoveryAvailable ? "" : runtimeRecoveryReason,
-            content: recoveryActionMarkup({
+            content: (runtimeMode === "desktop" ? recoveryActionMarkup({
               action: "managed-launch",
               key: `managed-launch:${desktopAppId}`,
               label: t("agent.managed_relaunch"),
               icon: "app-window",
               disabled: !runtimeRecoveryAvailable,
               data: { app: desktopAppId, plugin: pluginId },
-            }) + recoveryActionMarkup({
+            }) : "") + recoveryActionMarkup({
               action: "agent-refresh",
               key: `agent-refresh:${pluginId}`,
-              label: t("agent.refresh"),
+              label: t(item.location ? "location.recheck" : "agent.refresh"),
               icon: "refresh-cw",
               data: { plugin: pluginId },
-            }),
+            }) + agentLocationActionMarkup(item),
           })}
         </span>
       ` : `<span class="life-step"><i class="life-icon" data-lucide="cpu" aria-hidden="true"></i>${runtimeLabel}</span>`;
@@ -4001,6 +4071,8 @@
               <i data-lucide="refresh-cw" aria-hidden="true"></i>
               <strong>${t("common.refresh_agents")}</strong>
             </button>
+            ${item.location ? `<button class="menu-action" type="button" data-locate-agent="${escapeHtml(pluginId)}"><i data-lucide="folder-search" aria-hidden="true"></i><strong>${t("location.action")}</strong></button>` : ""}
+            ${item.location_recovery?.state === "connecting" ? `<span role="status">${t("location.connecting")}</span>` : ""}
             ${managedAction}
             ${managedTerminalAction}
             ${runtimeModes.length > 1 ? `
@@ -4133,7 +4205,7 @@
       });
       document.querySelectorAll("[data-refresh-agent]").forEach((button) => {
         button.addEventListener("click", () => runDashboardAction("plugins-message", async () => {
-          await refreshAll();
+          await refreshAgentLocation(button.dataset.refreshAgent);
           showToast(`${t("agent.refresh")}：${pluginDisplayName(button.dataset.refreshAgent)}`, "ok");
         }));
       });
@@ -4252,7 +4324,13 @@
         // live Hub answer; only a hard failure falls back to the offline view.
         const degraded = doctorStatusDegraded(data);
         if (!response.ok || (!data.ok && !degraded)) throw new Error(data.error || "Hub 状态读取失败");
-        if (authRevision === state.authRevision) applyStatus(data);
+        if (authRevision === state.authRevision) {
+          if (state.loginHandoff && data.ok) {
+            state.loginHandoff = false;
+            if (!data.logged_in) finishLoginTransition();
+          }
+          applyStatus(data);
+        }
         return data;
       } catch (error) {
         if (authRevision === state.authRevision) applyStatus(offlineStatusFromLast(error?.message || String(error)));
@@ -4869,13 +4947,15 @@
       window.clearTimeout(state.loginTransitionTimer);
       document.getElementById("login-transition-status").hidden = false;
       document.getElementById("login-transition-detail").textContent = t("login.starting_hub");
+      // 先切换可见页面，再渲染完整 Dashboard 状态。状态渲染可能包含多张
+      // Agent 卡片，不能让成功登录停留在已清空或冻结的表单上。
+      switchPage("dashboard");
       applyStatus({
         ...(state.lastStatus || {}),
         ok: true, logged_in: true, host_token_set: true, remote_control_ready: false,
         account: data.account || {}, connection_state: "connecting", connection_label: t("status.connecting"),
         connection_detail: t("login.starting_hub"), host_plugin_sync_state: "syncing",
       }, { force: true });
-      switchPage("dashboard");
       // One bounded deadline; a delayed restart must never look like a login failure.
       state.loginTransitionTimer = window.setTimeout(() => {
         state.loginTransitionTimer = null;
@@ -4893,9 +4973,11 @@
         return;
       }
       const button = document.getElementById("password-login-btn");
+      const form = document.getElementById("login-form");
       state.loginSubmitting = true;
       button.disabled = true;
       button.setAttribute("aria-busy", "true");
+      form.setAttribute("aria-busy", "true");
       button.querySelector("span").textContent = t("login.signing_in");
       setScopedMessage("login-message", t("login.signing_in"));
       try {
@@ -4906,8 +4988,9 @@
         });
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error_code === "C100500" ? t("login.credentials_mismatch") : (data.error || "账号密码登录失败"));
-        document.getElementById("login-password").value = "";
         beginLoginTransition(data);
+        // 仅在 Dashboard 可见后清除密码。成功前保留表单内容，避免空登录页闪现。
+        document.getElementById("login-password").value = "";
         if (hubRestartScheduled(data)) {
           handleScheduledHubRestart();
           return data;
@@ -4929,6 +5012,7 @@
         state.loginSubmitting = false;
         button.disabled = false;
         button.removeAttribute("aria-busy");
+        form.removeAttribute("aria-busy");
         button.querySelector("span").textContent = t("login.submit");
       }
     }
@@ -5073,17 +5157,17 @@
     }
 
     async function launchDesktopApp(appId, { notify = true } = {}) {
-      if (!appId) return;
-      if (state.managedLaunches.has(appId)) return;
+      if (!appId || state.managedLaunches.has(appId)) return;
+      const desktopCard = state.lastStatus?.desktop_apps?.[appId] || null;
+      const confirmationMessage = String(desktopCard?.managed_confirmation_message || "").trim();
+      if (confirmationMessage && !await requestDashboardConfirmation(confirmationMessage, {
+        title: t("agent.managed_relaunch"),
+        confirmText: t("common.continue"),
+      })) return;
+      // 只有用户确认后才进入进行中状态，取消确认不会留下 loading 按钮。
       state.managedLaunches.add(appId);
       if (state.lastStatus) applyStatus(state.lastStatus, { force: true });
-      const desktopCard = state.lastStatus?.desktop_apps?.[appId] || null;
       try {
-        const confirmationMessage = String(desktopCard?.managed_confirmation_message || "").trim();
-        if (confirmationMessage && !await requestDashboardConfirmation(confirmationMessage, {
-          title: t("agent.managed_relaunch"),
-          confirmText: t("common.continue"),
-        })) return;
         if (notify) setScopedMessage("plugins-message", t("agent.managed_starting", { name: desktopCard?.display_name || appId }));
         const response = await fetch(`/api/desktop/${encodeURIComponent(appId)}`, {
           method: "POST",
@@ -5093,7 +5177,7 @@
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || `启动 ${appId} 失败`);
         if (notify) setScopedMessage("plugins-message", data.message || `${appId} 已切到 Prism 托管启动。`, "ok");
-        await refreshAll();
+        await refreshAll({ forceStatus: true });
         scheduleManagedDesktopStatusRefresh(appId);
         return data;
       } finally {
@@ -5102,11 +5186,24 @@
       }
     }
 
+    function managedDesktopStatusSettled(appId) {
+      const desktopCard = state.lastStatus?.desktop_apps?.[appId];
+      if (!desktopCard?.cdp_reachable) return false;
+      const plugins = (state.lastStatus?.plugins || []).filter((item) => {
+        const pluginAppId = String(item?.desktop_app_id || String(item?.plugin_id || "").split(".")[0] || "");
+        return pluginAppId === appId && String(item?.current_runtime_mode || "") === "desktop";
+      });
+      // 部分桌面应用只有桌面健康卡片，此时 CDP 就是完整就绪信号；否则继续等待 Agent 探测。
+      return plugins.length === 0 || plugins.every((item) => item?.runtime_status?.available === true || item?.runtime_status?.code === "ready");
+    }
+
     function scheduleManagedDesktopStatusRefresh(appId) {
-      // Runtime availability, recovery notices and remote state settle over
-      // the seconds after the CDP port answers; poll until the card reports
-      // the launched app as reachable instead of stopping at one refresh.
-      scheduleStatusSettle(() => Boolean(state.lastStatus?.desktop_apps?.[appId]?.cdp_reachable));
+      // CDP 可能早于插件运行时重连完成；启动后先快速采样，再逐步退避，
+      // 等待两个信号都就绪，避免 Agent 卡片一直等到 15 秒轮询才更新。
+      scheduleStatusSettle(
+        () => managedDesktopStatusSettled(appId),
+        [250, 750, 1500, 3000, 5000, 8000, 12000, 18000, 25000],
+      );
     }
 
     async function openManagedTerminal(pluginId) {
@@ -5149,6 +5246,7 @@
     }
 
     function bindRecoveryActions(root = document) {
+      bindAgentLocationActions(root);
       bindRecoveryControls(root);
       root.querySelectorAll("[data-recovery-action]").forEach((button) => {
         if (button.dataset.recoveryActionBound === "true") return;
@@ -5181,7 +5279,7 @@
           }
           if (action === "agent-refresh") {
             const pluginId = button.dataset.recoveryPlugin;
-            runRecoveryAction(button, key, refreshAll, {
+            runRecoveryAction(button, key, () => refreshAgentLocation(pluginId), {
               successMessage: () => `${t("agent.refresh")}：${pluginDisplayName(pluginId)}`,
             });
           }
@@ -5273,7 +5371,7 @@
     }
 
     function switchPage(page) {
-      if (page !== "login" && state.lastStatus && !state.lastStatus.logged_in && !doctorStatusDegraded(state.lastStatus)) page = "login";
+      if (page !== "login" && state.lastStatus && !state.lastStatus.logged_in && !doctorStatusDegraded(state.lastStatus) && !state.loginTransition) page = "login";
       state.page = page;
       document.querySelector(".app").classList.toggle("auth-mode", page === "login");
       document.querySelectorAll("[data-page]").forEach((section) => {
@@ -5434,6 +5532,9 @@
     // Hands the restart window to a dedicated recovery flow so the page never
     // keeps rendering the pre-action snapshot waiting for a manual refresh.
     function handleScheduledHubRestart() {
+      if (state.loginTransition) {
+        try { sessionStorage.setItem("prism.dashboard.login-handoff", "1"); } catch {}
+      }
       state.awaitingHubRestart = true;
       if (window.parent !== window) {
         // The Desktop shell waits for the replacement sidecar and reloads
@@ -5710,6 +5811,16 @@
       });
     });
     setTheme(loadTheme());
+    if (loginHandoffPending) {
+      // sidecar 重启会重新加载 iframe，恢复登录交接态，避免短暂显示空登录页。
+      switchPage("dashboard");
+      document.getElementById("login-transition-status").hidden = false;
+      document.getElementById("login-transition-detail").textContent = t("login.starting_hub");
+      state.loginTransitionTimer = window.setTimeout(() => {
+        state.loginTransitionTimer = null;
+        document.getElementById("login-transition-detail").textContent = t("login.startup_delayed");
+      }, 60_000);
+    }
     startAutoRefresh();
     runDashboardAction("home-message", refreshAll);
     recoverConnectionOnStartup();

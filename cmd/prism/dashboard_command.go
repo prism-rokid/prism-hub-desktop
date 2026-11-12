@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"rokid-prism-hub/internal/agentlocation"
 	prismapi "rokid-prism-hub/internal/api"
 	"rokid-prism-hub/internal/buildinfo"
 	bridgeconfig "rokid-prism-hub/internal/config"
@@ -222,28 +223,67 @@ type dashboardStatusCache struct {
 	configPath string
 	dbPath     string
 
-	mu          sync.RWMutex
-	refreshMu   sync.Mutex
-	value       dashboardStatus
-	initialized bool
-	refreshedAt time.Time
-	revision    uint64
+	mu               sync.RWMutex
+	refreshMu        sync.Mutex
+	scheduleMu       sync.Mutex
+	refreshRunning   bool
+	refreshRequested bool
+	value            dashboardStatus
+	initialized      bool
+	refreshedAt      time.Time
+	revision         uint64
+	collect          func() dashboardStatus
 }
 
 func newDashboardStatusCache(configPath, dbPath string) *dashboardStatusCache {
-	return &dashboardStatusCache{configPath: configPath, dbPath: dbPath}
+	return &dashboardStatusCache{
+		configPath: configPath,
+		dbPath:     dbPath,
+		collect: func() dashboardStatus {
+			return collectServingHubDashboardStatus(configPath, dbPath)
+		},
+	}
 }
 
-// refreshDashboardStatusCacheSoon re-samples the status cache after a local
-// mutation. Without it, the Dashboard's regular polling keeps serving the
-// pre-action snapshot until the next 15-second ticker cycle. Async on
-// purpose: the collect walks the filesystem, plugin dirs and CDP endpoints,
-// which must not delay the mutation response the caller is waiting on.
+// refreshDashboardStatusCacheSoon 请求一次异步状态采样。
+// 多个本地变更同时发生时只保留一个采样任务；采样期间的新请求会合并为
+// 当前采样结束后的最后一次补采样，避免重复执行进程、文件和 CDP 检查。
 func refreshDashboardStatusCacheSoon(statusCache *dashboardStatusCache) {
 	if statusCache == nil {
 		return
 	}
-	go statusCache.Refresh()
+	statusCache.requestRefresh()
+}
+
+func (c *dashboardStatusCache) requestRefresh() {
+	c.scheduleMu.Lock()
+	c.refreshRequested = true
+	if c.refreshRunning {
+		c.scheduleMu.Unlock()
+		return
+	}
+	c.refreshRunning = true
+	c.scheduleMu.Unlock()
+	go c.runRequestedRefresh()
+}
+
+func (c *dashboardStatusCache) runRequestedRefresh() {
+	for {
+		c.scheduleMu.Lock()
+		c.refreshRequested = false
+		c.scheduleMu.Unlock()
+
+		c.Refresh()
+
+		c.scheduleMu.Lock()
+		if c.refreshRequested {
+			c.scheduleMu.Unlock()
+			continue
+		}
+		c.refreshRunning = false
+		c.scheduleMu.Unlock()
+		return
+	}
 }
 
 func (c *dashboardStatusCache) Refresh() dashboardStatus {
@@ -262,7 +302,13 @@ func (c *dashboardStatusCache) Refresh() dashboardStatus {
 		return value
 	}
 	c.mu.RUnlock()
-	value := collectServingHubDashboardStatus(c.configPath, c.dbPath)
+	collect := c.collect
+	if collect == nil {
+		collect = func() dashboardStatus {
+			return collectServingHubDashboardStatus(c.configPath, c.dbPath)
+		}
+	}
+	value := collect()
 	c.mu.Lock()
 	c.value = value
 	c.initialized = true
@@ -651,6 +697,7 @@ func serveDashboardUIContextWithOptions(ctx context.Context, configPath, dbPath,
 	// an idle Hub does not continuously refresh this presentation cache.
 
 	mux := http.NewServeMux()
+	registerAgentLocationAPI(mux, ctx, configPath, statusCache)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -729,6 +776,9 @@ func serveDashboardUIContextWithOptions(ctx context.Context, configPath, dbPath,
 		}
 		payload, ok := statusCache.Snapshot()
 		lightweight := r.URL.Query().Get("lightweight") == "1"
+		if r.URL.Query().Get("refresh") == "1" {
+			agentlocation.Invalidate()
+		}
 		if r.URL.Query().Get("refresh") == "1" || (!ok && !lightweight) || payload.CheckedAt == "" {
 			payload = statusCache.Refresh()
 		}
@@ -1162,6 +1212,8 @@ func serveDashboardUIContextWithOptions(ctx context.Context, configPath, dbPath,
 				writeDashboardError(w, http.StatusBadRequest, "invalid json body")
 				return
 			}
+			agentLocationConfigMu.Lock()
+			defer agentLocationConfigMu.Unlock()
 			cfg, err := bridgeconfig.Load(configPath)
 			if err != nil {
 				writeDashboardError(w, http.StatusInternalServerError, fmt.Sprintf("load config failed: %v", err))
@@ -1218,6 +1270,11 @@ func serveDashboardUIContextWithOptions(ctx context.Context, configPath, dbPath,
 					persistDashboardPluginConfig(cfg, key, pluginConfig, existed)
 				}
 			}
+			locationChanges, locationErr := prepareLegacyDesktopLocations(r.Context(), cfg, req.DesktopApps)
+			if locationErr != nil {
+				writeDashboardError(w, http.StatusBadRequest, locationErr.Error())
+				return
+			}
 			if req.DesktopApps != nil {
 				applyDashboardDesktopAppOverrides(cfg, req.DesktopApps)
 			}
@@ -1225,7 +1282,26 @@ func serveDashboardUIContextWithOptions(ctx context.Context, configPath, dbPath,
 				writeDashboardError(w, http.StatusInternalServerError, fmt.Sprintf("save config failed: %v", err))
 				return
 			}
-			hubApply := dashboardApplyConfigSaveWithRestart(configPath, dbPath, req.Region != nil || req.HostToken != nil || req.BridgeEnabled != nil || req.KeepAwake != nil || req.PluginConfig != nil || req.PluginModes != nil || req.DesktopApps != nil, restartHub)
+			hubApply := dashboardApplyConfigSaveWithRestart(configPath, dbPath, req.Region != nil || req.HostToken != nil || req.BridgeEnabled != nil || req.KeepAwake != nil || req.PluginConfig != nil || req.PluginModes != nil, restartHub)
+			if fmt.Sprint(hubApply["action"]) != "desktop_restart_scheduled" {
+				for _, id := range locationChanges {
+					if beginLocationOperation(id, "desktop") {
+						agentlocation.Invalidate()
+						go recoverLocatedAgent(ctx, configPath, id, "desktop", statusCache)
+					}
+				}
+				if len(req.DesktopApps) > 0 && len(locationChanges) == 0 {
+					if reloader := currentDashboardRuntimePluginReloader(); reloader != nil {
+						for appID := range req.DesktopApps {
+							if spec, ok := dashboardDesktopAppSpecByID(appID); ok {
+								reloadCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+								_ = reloader.ReloadPlugin(reloadCtx, spec.PluginID)
+								cancel()
+							}
+						}
+					}
+				}
+			}
 			if fmt.Sprint(hubApply["action"]) != "desktop_restart_scheduled" {
 				// A scheduled sidecar restart rebuilds the cache in the
 				// replacement process; only live-applied saves need it here.
@@ -1840,6 +1916,15 @@ func dashboardOfficialDesktopApps() []dashboardDesktopAppSpec {
 			MacQuitScripts: []string{`tell application id "com.nousresearch.hermes" to quit`},
 			LinuxCommand:   "hermes-desktop",
 		},
+		{
+			AppID:          "dsh",
+			PluginID:       "dsh",
+			DisplayName:    "DeepSeek Harness",
+			AppEnvKey:      "PRISM_DSH_APP_PATH",
+			UserDataEnvKey: "PRISM_DSH_USER_DATA_DIR",
+			MacQuitScripts: []string{`tell application id "com.deepseek.dsh" to quit`},
+			LinuxCommand:   "deepseek-harness",
+		},
 	}
 }
 
@@ -1962,6 +2047,7 @@ func collectDashboardStatusWithHubProbe(configPath, dbPath string, probeHub bool
 	}
 	discovered, discoveryErr := pluginpkg.ScanDirs(status.PluginDirs)
 	status.Plugins = dashboardPluginsFromDiscovered(discovered, cfg, discoveryErr)
+	annotateAgentLocations(cfg, status.Plugins)
 	managedPlugins := make(map[string]bool, len(discovered))
 	for _, plugin := range discovered {
 		managedPlugins[strings.ToLower(strings.TrimSpace(plugin.Manifest.ID))] = plugin.Manifest.ManagedLaunch
@@ -2091,21 +2177,45 @@ func dashboardDesktopAppStatusWithManagedLaunch(cfg *bridgeconfig.Config, plugin
 	}
 	appPathAuto := dashboardDesktopAppPath(spec)
 	appPath := firstNonEmpty(appPathOverride, appPathAuto)
+	// 使用与插件收到的相同可执行文件和用户数据目录。
+	resolvedLocation, locationErr := resolveAgentLocation(context.Background(), cfg, spec.PluginID, "desktop")
+	if locationErr == nil {
+		appPath = resolvedLocation.Executable
+		if resolvedLocation.Source == "manual" || resolvedLocation.Source == "legacy" {
+			appPathOverride = appPath
+		} else {
+			appPathAuto = appPath
+		}
+	} else if cfg != nil {
+		if _, manual := cfg.Bridge.Plugins[spec.PluginID].Locations["desktop"]; manual {
+			appPath = ""
+		}
+	}
 	userDataDirOverride := firstNonEmptyMap(pluginEnv, spec.UserDataEnvKey)
 	if userDataDirOverride == "" {
 		userDataDirOverride = firstNonEmptyMap(globalEnv, spec.UserDataEnvKey)
 	}
 	userDataDirAuto := dashboardDesktopProfileDir(spec)
+	if locationErr == nil {
+		userDataDirAuto = resolvedLocation.UserDataDir
+	}
 	userDataDir := firstNonEmpty(userDataDirOverride, userDataDirAuto)
 	devtoolsFile := filepath.Join(userDataDir, "DevToolsActivePort")
 	processes, processErr := dashboardDesktopProcessesWithError(spec)
 	running := len(processes) > 0
 	cdpPort, cdpReachable := dashboardManagedCDPStatus(spec, userDataDir, devtoolsFile)
+	manualCDP := false
+	if running && !cdpReachable {
+		cdpPort, manualCDP = dashboardManualCDPStatus(spec)
+		cdpReachable = manualCDP
+	}
 	status := "stopped"
 	processDetectionError := ""
 	if processErr != nil {
 		status = "process_detection_unavailable"
 		processDetectionError = processErr.Error()
+	} else if running && cdpReachable && manualCDP {
+		status = "running_unmanaged_cdp"
 	} else if running && cdpReachable {
 		status = "ready"
 	} else if running {
@@ -2159,6 +2269,8 @@ func dashboardDesktopProfileDir(spec dashboardDesktopAppSpec) string {
 		switch spec.AppID {
 		case "hermes":
 			return filepath.Join(home, "Library", "Application Support", "Hermes")
+		case "dsh":
+			return filepath.Join(home, "Library", "Application Support", "Prism", "DeepSeek Harness")
 		default:
 			return filepath.Join(home, "Library", "Application Support", "Codex")
 		}
@@ -2174,6 +2286,8 @@ func dashboardDesktopProfileDir(spec dashboardDesktopAppSpec) string {
 		switch spec.AppID {
 		case "hermes":
 			return filepath.Join(base, "Hermes")
+		case "dsh":
+			return filepath.Join(base, "Prism", "DeepSeek Harness")
 		default:
 			if dashboardWindowsStoreCodexAppPath() != "" {
 				return filepath.Join(base, "Codex", "web", "Codex")
@@ -2189,6 +2303,8 @@ func dashboardDesktopProfileDir(spec dashboardDesktopAppSpec) string {
 		switch spec.AppID {
 		case "hermes":
 			return filepath.Join(base, "Hermes")
+		case "dsh":
+			return filepath.Join(base, "Prism", "DeepSeek Harness")
 		default:
 			return filepath.Join(base, "Codex")
 		}
@@ -2206,6 +2322,8 @@ func dashboardDesktopAppPath(spec dashboardDesktopAppSpec) string {
 				return managed
 			}
 			return "/Applications/Hermes.app/Contents/MacOS/Hermes-Setup"
+		case "dsh":
+			return "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness"
 		default:
 			return dashboardCodexAppPath()
 		}
@@ -2218,6 +2336,11 @@ func dashboardDesktopAppPath(spec dashboardDesktopAppSpec) string {
 				chooseNonEmptyPath(localAppData, "Programs", "Hermes", "Hermes.exe"),
 				chooseNonEmptyPath(programFiles, "Hermes", "Hermes.exe"),
 			)
+		case "dsh":
+			return firstNonEmpty(
+				chooseNonEmptyPath(localAppData, "Programs", "DeepSeek Harness", "DeepSeek Harness.exe"),
+				chooseNonEmptyPath(programFiles, "DeepSeek Harness", "DeepSeek Harness.exe"),
+			)
 		default:
 			return dashboardCodexAppPath()
 		}
@@ -2225,6 +2348,8 @@ func dashboardDesktopAppPath(spec dashboardDesktopAppSpec) string {
 		switch spec.AppID {
 		case "hermes":
 			return firstNonEmpty(strings.TrimSpace(os.Getenv("PRISM_HERMES_LINUX_COMMAND")), spec.LinuxCommand, "hermes")
+		case "dsh":
+			return firstNonEmpty(strings.TrimSpace(os.Getenv("PRISM_DSH_LINUX_COMMAND")), spec.LinuxCommand, "deepseek-harness")
 		default:
 			return firstNonEmpty(strings.TrimSpace(os.Getenv("PRISM_CODEX_LINUX_COMMAND")), spec.LinuxCommand, "codex")
 		}
@@ -2282,6 +2407,8 @@ func dashboardCodexLaunchLabel(status string) string {
 		return "重新托管启动"
 	case "running_unmanaged":
 		return "接管当前实例"
+	case "running_unmanaged_cdp":
+		return "切换到 Prism 托管"
 	case "process_detection_unavailable":
 		return "暂不能启动"
 	default:
@@ -2295,6 +2422,8 @@ func dashboardDesktopManagedStatusLabel(status string) string {
 		return "已由 Prism 托管"
 	case "running_unmanaged":
 		return "当前是手动启动实例"
+	case "running_unmanaged_cdp":
+		return "当前是手动启动实例（远程可用）"
 	case "process_detection_unavailable":
 		return "无法确认桌面实例状态"
 	default:
@@ -2314,6 +2443,11 @@ func dashboardDesktopManagedStatusMessage(spec dashboardDesktopAppSpec, status, 
 		return fmt.Sprintf("%s 当前已由 Prism 托管，并已暴露可用的 CDP 端口。", appName)
 	case "running_unmanaged":
 		return fmt.Sprintf("检测到正在运行的 %s，但它没有暴露 Prism 需要的 CDP 端口。若要使用远程控制，需要切换到 Prism 托管启动。", appName)
+	case "running_unmanaged_cdp":
+		if strings.TrimSpace(cdpPort) != "" {
+			return fmt.Sprintf("检测到手动启动的 %s，已通过 CDP 端口 %s 连接，远程控制可用。切换到 Prism 托管启动可获得自动重启与动态端口发现。", appName, strings.TrimSpace(cdpPort))
+		}
+		return fmt.Sprintf("检测到手动启动的 %s，已连接可用 CDP，远程控制可用。切换到 Prism 托管启动可获得自动重启与动态端口发现。", appName)
 	case "process_detection_unavailable":
 		return fmt.Sprintf("Prism 无法确认 %s 当前是否运行。为避免启动第二个实例，暂时禁用托管启动。", appName)
 	default:
@@ -2323,7 +2457,7 @@ func dashboardDesktopManagedStatusMessage(spec dashboardDesktopAppSpec, status, 
 
 func dashboardDesktopManagedRestartRequired(status string) bool {
 	switch status {
-	case "ready", "running_unmanaged":
+	case "ready", "running_unmanaged", "running_unmanaged_cdp":
 		return true
 	default:
 		return false
@@ -2336,7 +2470,7 @@ func dashboardDesktopManagedConfirmationMessage(spec dashboardDesktopAppSpec, st
 	}
 	appName := spec.DisplayName
 	switch status {
-	case "running_unmanaged":
+	case "running_unmanaged", "running_unmanaged_cdp":
 		return fmt.Sprintf("%s 当前不是 Prism 托管实例，切换后会先重启当前应用，正在进行的对话可能被打断。确认继续吗？", appName)
 	default:
 		return fmt.Sprintf("这会重启当前由 Prism 托管的 %s 实例，正在进行的对话可能被打断。确认继续吗？", appName)
@@ -2381,24 +2515,19 @@ func dashboardCodexAppPath() string {
 	return ""
 }
 
-var dashboardWindowsStoreCodexPath = func() ([]byte, error) {
-	return exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$pkg=Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue; if($pkg){Join-Path $pkg.InstallLocation 'app\ChatGPT.exe'}`).Output()
+var dashboardWindowsStoreCodexPath = func(ctx context.Context) ([]byte, error) {
+	return agentlocation.WindowsStorePath(ctx)
 }
-
-var dashboardWindowsStoreCodexOnce sync.Once
-var dashboardWindowsStoreCodexCached string
 
 func dashboardWindowsStoreCodexAppPath() string {
 	if runtimeGOOS() != "windows" {
 		return ""
 	}
-	dashboardWindowsStoreCodexOnce.Do(func() {
-		out, err := dashboardWindowsStoreCodexPath()
-		if err == nil {
-			dashboardWindowsStoreCodexCached = strings.TrimSpace(string(out))
-		}
-	})
-	return dashboardWindowsStoreCodexCached
+	out, err := dashboardWindowsStoreCodexPath(context.Background())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func fileExists(path string) bool {
@@ -2788,7 +2917,7 @@ func dashboardDesktopProcessesWithError(spec dashboardDesktopAppSpec) ([]map[str
 		items := make([]map[string]any, 0, len(rows))
 		for _, row := range rows {
 			command := strings.TrimSpace(row.CommandLine)
-			if row.ProcessID <= 0 || !dashboardWindowsDesktopProcessIsMain(spec, row.Name, row.ExecutablePath) {
+			if row.ProcessID <= 0 || !dashboardWindowsDesktopProcessIsMain(spec, row.Name, row.ExecutablePath, command) {
 				continue
 			}
 			items = append(items, map[string]any{"pid": row.ProcessID, "command": command})
@@ -2805,7 +2934,7 @@ var dashboardWindowsProcessSnapshot = func() ([]byte, error) {
 	// that run many Electron helper processes, and the managed launch polls it.
 	// -InputObject keeps array serialization: piping would emit a bare object
 	// when exactly one process matches, which the Go decoder does not accept.
-	return exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$data = @(Get-CimInstance Win32_Process -Filter "Name='Codex.exe' OR Name='ChatGPT.exe' OR Name='Hermes.exe' OR Name='Codex Helper.exe' OR Name='ChatGPT Helper.exe' OR Name='Hermes Helper.exe'" | Select-Object ProcessId,Name,CommandLine,ExecutablePath); ConvertTo-Json -InputObject $data -Compress`).Output()
+	return exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$data = @(Get-CimInstance Win32_Process -Filter "Name='Codex.exe' OR Name='ChatGPT.exe' OR Name='Hermes.exe' OR Name='DeepSeek Harness.exe' OR Name='Codex Helper.exe' OR Name='ChatGPT Helper.exe' OR Name='Hermes Helper.exe' OR Name='DeepSeek Harness Helper.exe'" | Select-Object ProcessId,Name,CommandLine,ExecutablePath); ConvertTo-Json -InputObject $data -Compress`).Output()
 }
 
 // dashboardWindowsExecutableBase extracts the lowercase executable base name
@@ -2820,12 +2949,17 @@ func dashboardWindowsExecutableBase(executable string) string {
 	return strings.ToLower(strings.TrimSuffix(executable, ".exe"))
 }
 
-func dashboardWindowsDesktopProcessIsMain(spec dashboardDesktopAppSpec, name, executable string) bool {
+func dashboardWindowsDesktopProcessIsMain(spec dashboardDesktopAppSpec, name, executable, command string) bool {
+	if strings.Contains(strings.ToLower(strings.TrimSpace(command)), "--type=") {
+		return false
+	}
 	name = strings.ToLower(strings.TrimSpace(name))
 	base := dashboardWindowsExecutableBase(executable)
 	switch spec.AppID {
 	case "hermes":
 		return name == "hermes.exe" || name == "hermes" || base == "hermes"
+	case "dsh":
+		return (name == "deepseek harness.exe" || name == "deepseek harness" || base == "deepseek harness") && (base == "" || base == "deepseek harness")
 	default:
 		return (name == "codex.exe" || name == "codex" || name == "chatgpt.exe" || name == "chatgpt") && (base == "" || base == "codex" || base == "chatgpt")
 	}
@@ -2840,21 +2974,35 @@ func dashboardWindowsListeningPorts(pid int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var values []string
+	return dashboardWindowsListeningPortsFromJSON(out)
+}
+
+func dashboardWindowsListeningPortsFromJSON(out []byte) ([]string, error) {
 	trimmed := strings.TrimSpace(string(out))
-	if trimmed == "" {
+	if trimmed == "" || trimmed == "null" {
 		return nil, nil
 	}
+
+	// PowerShell 将 LocalPort 序列化为数字；一个监听端口是单个数字，多个端口是数字数组。
+	var numbers []int
 	if strings.HasPrefix(trimmed, "[") {
-		if err := json.Unmarshal(out, &values); err != nil {
+		if err := json.Unmarshal(out, &numbers); err != nil {
 			return nil, err
 		}
 	} else {
-		var value any
-		if err := json.Unmarshal(out, &value); err != nil {
+		var number int
+		if err := json.Unmarshal(out, &number); err != nil {
 			return nil, err
 		}
-		values = append(values, fmt.Sprint(value))
+		numbers = append(numbers, number)
+	}
+
+	values := make([]string, 0, len(numbers))
+	for _, number := range numbers {
+		if number < 1 || number > 65535 {
+			return nil, fmt.Errorf("invalid listening port: %d", number)
+		}
+		values = append(values, strconv.Itoa(number))
 	}
 	return values, nil
 }
@@ -2873,6 +3021,10 @@ func dashboardDesktopProcessIsMain(spec dashboardDesktopAppSpec, command string)
 		return regexp.MustCompile(`(?i)(?:^|/)Contents/MacOS/Hermes(?:$|\s+--)`).MatchString(command) ||
 			regexp.MustCompile(`(?i)^hermes-desktop(?:$|\s+--)`).MatchString(command) ||
 			regexp.MustCompile(`(?i)(?:^|[\\/])hermes-desktop\.exe(?:$|[\s"])`).MatchString(command)
+	case "dsh":
+		return regexp.MustCompile(`(?i)(?:^|/)Contents/MacOS/DeepSeek Harness(?:$|\s+--)`).MatchString(command) ||
+			regexp.MustCompile(`(?i)^(?:deepseek-harness|DeepSeek Harness)(?:$|\s+--)`).MatchString(command) ||
+			regexp.MustCompile(`(?i)(?:^|[\\/])DeepSeek Harness\.exe(?:$|[\s"])`).MatchString(command)
 	default:
 		// Newer Codex Desktop builds run inside ChatGPT.app. Match its actual
 		// main executable while excluding ChatGPT Helper renderer/GPU processes.
@@ -2896,6 +3048,8 @@ func dashboardDesktopProcessPattern(spec dashboardDesktopAppSpec) string {
 	switch spec.AppID {
 	case "hermes":
 		return `Hermes(\.app| Helper| )|/Hermes$|/Contents/MacOS/Hermes|hermes-desktop`
+	case "dsh":
+		return `DeepSeek Harness(\.app| Helper| )|/DeepSeek Harness$|/Contents/MacOS/DeepSeek Harness|deepseek-harness`
 	default:
 		return `Codex(\.app| )|ChatGPT\.app|/Codex$|/Contents/MacOS/Codex|/Contents/MacOS/ChatGPT`
 	}
@@ -2986,6 +3140,18 @@ func dashboardManagedCDPStatus(spec dashboardDesktopAppSpec, userDataDir, devtoo
 	return "", false
 }
 
+func dashboardManualCDPStatus(spec dashboardDesktopAppSpec) (string, bool) {
+	if spec.AppID != "dsh" {
+		return "", false
+	}
+	for _, port := range []string{"9222", "9223", "9333"} {
+		if discovered, reachable := dashboardCDPStatusOnPort(port); reachable {
+			return discovered, true
+		}
+	}
+	return "", false
+}
+
 // A managed launch is only useful after the Desktop CDP endpoint is actually
 // reachable. Returning before then lets the mobile client race the Electron
 // startup and permanently observe the plugin as unavailable.
@@ -3066,6 +3232,12 @@ func dashboardStartManagedCodex(cfg *bridgeconfig.Config) (map[string]any, error
 }
 
 func dashboardStartManagedDesktopApp(cfg *bridgeconfig.Config, spec dashboardDesktopAppSpec) (map[string]any, error) {
+	return dashboardStartManagedDesktopAppOptions(cfg, spec, true)
+}
+func dashboardStartManagedDesktopAppWithoutStop(cfg *bridgeconfig.Config, spec dashboardDesktopAppSpec) (map[string]any, error) {
+	return dashboardStartManagedDesktopAppOptions(cfg, spec, false)
+}
+func dashboardStartManagedDesktopAppOptions(cfg *bridgeconfig.Config, spec dashboardDesktopAppSpec, allowStop bool) (map[string]any, error) {
 	if runtimeGOOS() != "darwin" && runtimeGOOS() != "windows" {
 		return nil, fmt.Errorf("managed %s launch is currently unsupported on %s", spec.DisplayName, runtimeGOOS())
 	}
@@ -3087,8 +3259,14 @@ func dashboardStartManagedDesktopApp(cfg *bridgeconfig.Config, spec dashboardDes
 	if userDataDir == "" {
 		userDataDir = dashboardDesktopProfileDir(spec)
 	}
-	if err := stopDashboardDesktopProcesses(spec, userDataDir); err != nil {
-		return nil, fmt.Errorf("stop existing %s before managed launch: %w", spec.DisplayName, err)
+	if allowStop {
+		if err := stopDashboardDesktopProcesses(spec, userDataDir); err != nil {
+			return nil, fmt.Errorf("stop existing %s before managed launch: %w", spec.DisplayName, err)
+		}
+	} else if processes, err := dashboardDesktopProcessesWithError(spec); err != nil {
+		return nil, err
+	} else if len(processes) > 0 {
+		return nil, fmt.Errorf("%s is running; close it before managed launch", spec.DisplayName)
 	}
 	if err := os.MkdirAll(userDataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create user data dir failed: %w", err)
@@ -3540,6 +3718,7 @@ func applyDashboardDesktopAppOverridesForSpec(cfg *bridgeconfig.Config, spec das
 	pluginID := spec.PluginID
 	pluginConfig, existed := cfg.Bridge.Plugins[pluginID]
 	if app.AppPath != nil {
+		delete(pluginConfig.Locations, "desktop")
 		pluginConfig.Env = setDashboardEnvOverride(pluginConfig.Env, spec.AppEnvKey, *app.AppPath)
 		cfg.Bridge.PluginEnv = setDashboardEnvOverride(cfg.Bridge.PluginEnv, spec.AppEnvKey, "")
 	}

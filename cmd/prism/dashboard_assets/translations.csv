@@ -215,3 +215,38 @@ login.signing_in,正在登录并绑定设备…,Signing in and linking this devi
 login.success,登录成功,Signed in,ログインしました
 login.starting_hub,正在启动 Hub 并连接服务器…,Starting Hub and connecting to the server…,Hub を起動してサーバーに接続中…
 login.startup_delayed,登录已成功，但 Hub 连接尚未就绪。请检查上方连接状态或点击刷新连接。,Signed in but Hub is not ready yet. Check the connection status above or refresh the connection.,ログイン済みですが Hub の接続がまだ完了していません。上部の接続状態を確認するか接続を更新してください。
+location.action,定位 Agent,Locate Agent,Agent の場所を指定
+location.title,定位 {name},Locate {name},{name} の場所を指定
+location.directory,安装文件夹,Installation folder,インストールフォルダー
+location.browse,选择文件夹,Choose folder,フォルダーを選択
+location.choose_target,选择启动程序,Choose executable,実行ファイルを選択
+location.auto,恢复自动检测,Use automatic detection,自動検出に戻す
+location.save,保存并连接,Save and connect,保存して接続
+location.loading,正在读取安装位置…,Loading installation location…,インストール先を読み込み中…
+location.connecting,正在恢复连接…,Reconnecting…,再接続中…
+location.saved,安装位置已保存，正在检测并恢复连接。,Location saved. Detecting and reconnecting.,場所を保存しました。検出して再接続しています。
+location.desktop_hint,请选择包含 {names} 桌面程序的安装文件夹；macOS 可选择 .app。,Choose the installation folder containing {names}; on macOS you can choose the .app bundle.,{names} のインストールフォルダーを選択してください。macOS では .app を指定できます。
+location.cli_hint,请选择包含 {names} 命令或启动器的文件夹。,Choose the folder containing the {names} command or launcher.,{names} コマンドまたはランチャーを含むフォルダーを選択してください。
+location.host_hint,路径属于运行 Hub 的电脑。,The path must be on the computer running Hub.,Hub を実行しているコンピューターのパスを指定してください。
+location.browser_hint,浏览器中请手动输入 Hub 所在电脑的完整路径。,"In a browser, enter the full path on the Hub computer.",ブラウザーでは Hub のコンピューター上の完全なパスを入力してください。
+location.picker_timeout,目录选择未返回，请重试或手动输入。,Folder picker did not respond. Retry or enter a path.,フォルダー選択が応答しません。再試行するかパスを入力してください。
+location.source_manual,手动指定,Selected manually,手動指定
+location.source_legacy,已有配置,Existing configuration,既存の設定
+location.source_auto,自动检测,Automatically detected,自動検出
+location.not_found_title,未找到 {name},{name} not found,{name} が見つかりません
+location.program_not_found,插件已安装，未检测到 Agent。请选择安装位置。,"Plugin installed, but Agent was not found. Choose its installation location.",プラグインはインストール済みですが Agent が見つかりません。場所を指定してください。
+location.location_invalid,安装位置已失效，请重新定位。,Installation location is no longer valid. Locate Agent again.,インストール先が無効です。場所を再指定してください。
+location.data_unavailable,已找到 Agent，无法读取会话数据。,"Agent found, but session data cannot be read.",Agent は見つかりましたが、会話データを読み取れません。
+location.runtime_offline,已找到 Agent，尚未连接。,"Agent found, but not connected.",Agent は見つかりましたが、未接続です。
+location.authentication_failed,Agent 验证失败，请检查登录或连接配置。,Agent authentication failed. Check sign-in or connection settings.,Agent の認証に失敗しました。ログインまたは接続設定を確認してください。
+location.failed,定位失败，请重试。,Unable to locate Agent. Retry.,Agent の場所を指定できませんでした。再試行してください。
+location.error_invalid_directory,请输入 Hub 所在电脑上的文件夹绝对路径。,Enter an absolute folder path on the Hub computer.,Hub のコンピューター上のフォルダーの絶対パスを入力してください。
+location.error_directory_missing,文件夹不存在，请检查路径。,Folder does not exist. Check the path.,フォルダーが存在しません。パスを確認してください。
+location.error_permission_denied,无法访问该文件夹，请检查权限。,Cannot access this folder. Check permissions.,フォルダーにアクセスできません。権限を確認してください。
+location.error_program_not_found,此文件夹中未找到支持的 Agent 启动程序。,No supported Agent executable was found in this folder.,このフォルダーに対応する Agent 実行ファイルが見つかりません。
+location.error_configured_location_invalid,已配置的启动程序不可用，请重新定位。,Configured executable is unavailable. Locate Agent again.,設定された実行ファイルを利用できません。場所を再指定してください。
+location.error_multiple_candidates,找到多个启动程序，请选择一个后保存。,Multiple executables found. Select one before saving.,複数の実行ファイルが見つかりました。選択して保存してください。
+location.error_invalid_executable,请选择该安装目录内支持的启动程序。,Choose a supported executable inside the installation folder.,インストールフォルダー内の対応する実行ファイルを選択してください。
+location.error_location_failed,无法解析安装位置，请检查路径。,Cannot resolve installation location. Check the path.,インストール先を解決できません。パスを確認してください。
+location.recheck,重新检测,Detect again,再検出
+location.runtime_unknown,正在检测 Agent，请稍候。,Detecting Agent. Please wait.,Agent を検出しています。しばらくお待ちください。

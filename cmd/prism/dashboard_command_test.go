@@ -527,7 +527,11 @@ func TestDashboardRecoveryActionResources(t *testing.T) {
 		`data-recovery-action="${escapeHtml(action)}"`,
 		`launchDesktopApp(appId, { notify: false })`,
 		`function scheduleManagedDesktopStatusRefresh(appId)`,
-		`scheduleStatusSettle(() => Boolean(state.lastStatus?.desktop_apps?.[appId]?.cdp_reachable))`,
+		`function managedDesktopStatusSettled(appId)`,
+		`managedDesktopStatusSettled(appId)`,
+		`[250, 750, 1500, 3000, 5000, 8000, 12000, 18000, 25000]`,
+		`await refreshAll({ forceStatus: true })`,
+		`// 只有用户确认后才进入进行中状态，取消确认不会留下 loading 按钮。`,
 		`result?.message || (result ? t("agent.managed_recovered"`,
 		`action: "agent-refresh"`,
 		`data-recovery-toggle="remote-enabled"`,
@@ -546,6 +550,9 @@ func TestDashboardRecoveryActionResources(t *testing.T) {
 		if !strings.Contains(source, want) {
 			t.Fatalf("dashboard recovery action resource missing %q", want)
 		}
+	}
+	if confirmationAt, launchStateAt := strings.Index(source, `if (confirmationMessage && !await requestDashboardConfirmation`), strings.Index(source, `state.managedLaunches.add(appId)`); confirmationAt < 0 || launchStateAt < 0 || confirmationAt > launchStateAt {
+		t.Fatalf("managed launch must enter loading only after confirmation: confirmation=%d loading=%d", confirmationAt, launchStateAt)
 	}
 	if noticesAt, agentsAt := strings.Index(source, `id="agent-recovery-notices"`), strings.Index(source, `data-i18n="agent.bridge_plugins">Agents`); noticesAt < 0 || agentsAt < 0 || noticesAt > agentsAt {
 		t.Fatalf("pending notices must render above Agents: notices=%d agents=%d", noticesAt, agentsAt)
@@ -807,16 +814,46 @@ func TestDashboardManagedStatusHelpersForRunningUnmanaged(t *testing.T) {
 	}
 }
 
+func TestDashboardManagedStatusHelpersForManualDSHWithCDP(t *testing.T) {
+	spec, ok := dashboardDesktopAppSpecByID("dsh")
+	if !ok {
+		t.Fatal("缺少 DeepSeek Harness 桌面应用定义")
+	}
+	if label := dashboardDesktopManagedStatusLabel("running_unmanaged_cdp"); label != "当前是手动启动实例（远程可用）" {
+		t.Fatalf("手动 DSH 的状态标签错误：%q", label)
+	}
+	message := dashboardDesktopManagedStatusMessage(spec, "running_unmanaged_cdp", "DeepSeek Harness", "9222")
+	if !strings.Contains(message, "远程控制可用") || !strings.Contains(message, "9222") {
+		t.Fatalf("手动 DSH 的状态提示错误：%q", message)
+	}
+	if !dashboardDesktopManagedRestartRequired("running_unmanaged_cdp") {
+		t.Fatal("手动 DSH 切换托管前应要求确认")
+	}
+}
+
 func TestDashboardWindowsDesktopProcessIsMain(t *testing.T) {
 	codex, _ := dashboardDesktopAppSpecByID("codex")
-	if !dashboardWindowsDesktopProcessIsMain(codex, "Codex.exe", `C:\Users\me\AppData\Local\Programs\Codex\Codex.exe`) {
+	if !dashboardWindowsDesktopProcessIsMain(codex, "Codex.exe", `C:\Users\me\AppData\Local\Programs\Codex\Codex.exe`, `"C:\Users\me\AppData\Local\Programs\Codex\Codex.exe"`) {
 		t.Fatal("Codex main process was not recognized")
 	}
-	if dashboardWindowsDesktopProcessIsMain(codex, "Codex Helper.exe", `C:\Users\me\AppData\Local\Programs\Codex\Codex.exe`) {
+	if dashboardWindowsDesktopProcessIsMain(codex, "Codex Helper.exe", `C:\Users\me\AppData\Local\Programs\Codex\Codex.exe`, "helper") {
 		t.Fatal("Codex helper process must not be treated as main")
 	}
-	if dashboardWindowsDesktopProcessIsMain(codex, "Other.exe", `C:\Other\Other.exe`) {
+	if dashboardWindowsDesktopProcessIsMain(codex, "ChatGPT.exe", `C:\Program Files\WindowsApps\OpenAI.Codex\app\ChatGPT.exe`, `"C:\Program Files\WindowsApps\OpenAI.Codex\app\ChatGPT.exe" --type=renderer`) {
+		t.Fatal("同名的 Chromium 渲染进程不能被当作主进程")
+	}
+	if dashboardWindowsDesktopProcessIsMain(codex, "Other.exe", `C:\Other\Other.exe`, `C:\Other\Other.exe`) {
 		t.Fatal("unrelated process was recognized")
+	}
+	dsh, ok := dashboardDesktopAppSpecByID("dsh")
+	if !ok {
+		t.Fatal("缺少 DeepSeek Harness 桌面应用定义")
+	}
+	if !dashboardWindowsDesktopProcessIsMain(dsh, "DeepSeek Harness.exe", `C:\Users\me\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe`, `"C:\Users\me\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe"`) {
+		t.Fatal("未识别 DeepSeek Harness 主进程")
+	}
+	if dashboardWindowsDesktopProcessIsMain(dsh, "DeepSeek Harness Helper.exe", `C:\Users\me\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe`, `"C:\Users\me\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe" --type=renderer`) {
+		t.Fatal("DeepSeek Harness 辅助进程不能被识别为主进程")
 	}
 }
 
@@ -842,21 +879,31 @@ func TestDashboardDesktopProcessIsMainMatchesWindowsCommandLines(t *testing.T) {
 	}
 }
 
-func TestDashboardWindowsDesktopProcessSnapshot(t *testing.T) {
-	previous := dashboardWindowsProcessSnapshot
-	dashboardWindowsProcessSnapshot = func() ([]byte, error) {
-		return []byte(`[{"ProcessId":12,"Name":"Codex.exe","CommandLine":"Codex.exe --remote-debugging-port=0 --user-data-dir=C:\\Codex"},{"ProcessId":13,"Name":"Codex Helper.exe","CommandLine":"helper"}]`), nil
+func TestDashboardWindowsListeningPortsFromJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    []string
+		wantErr bool
+	}{
+		{name: "空输出", input: "", want: nil},
+		{name: "null", input: "null", want: nil},
+		{name: "单个端口", input: "9222", want: []string{"9222"}},
+		{name: "多个端口", input: "[9222, 9223]", want: []string{"9222", "9223"}},
+		{name: "空数组", input: "[]", want: []string{}},
+		{name: "非数字数组", input: `["9222"]`, wantErr: true},
+		{name: "无效端口", input: "0", wantErr: true},
 	}
-	t.Cleanup(func() { dashboardWindowsProcessSnapshot = previous })
-	old := runtime.GOOS
-	_ = old
-	rows := []struct {
-		ProcessID   int    `json:"ProcessId"`
-		Name        string `json:"Name"`
-		CommandLine string `json:"CommandLine"`
-	}{}
-	if err := json.Unmarshal([]byte(`[{"ProcessId":12,"Name":"Codex.exe","CommandLine":"Codex.exe --remote-debugging-port=0 --user-data-dir=C:\\Codex"}]`), &rows); err != nil || len(rows) != 1 {
-		t.Fatalf("snapshot fixture invalid: %v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := dashboardWindowsListeningPortsFromJSON([]byte(test.input))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("dashboardWindowsListeningPortsFromJSON(%q) error = %v, wantErr %v", test.input, err, test.wantErr)
+			}
+			if !test.wantErr && !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("dashboardWindowsListeningPortsFromJSON(%q) = %#v, want %#v", test.input, got, test.want)
+			}
+		})
 	}
 }
 
@@ -1054,7 +1101,7 @@ func TestDashboardDesktopAppsIncludesOfficialSpecs(t *testing.T) {
 	// card only when its managed_launch_specs declare a desktop-app target
 	// that the hub registry can resolve.
 	root := t.TempDir()
-	for _, pluginID := range []string{"codex", "hermes"} {
+	for _, pluginID := range []string{"codex", "hermes", "dsh"} {
 		pluginDir := filepath.Join(root, "plugins", pluginID)
 		if err := os.MkdirAll(pluginDir, 0o755); err != nil {
 			t.Fatal(err)
@@ -1079,7 +1126,7 @@ capabilities:
 	cfg := bridgeconfig.Default()
 	cfg.Bridge.PluginDirs = []string{filepath.Join(root, "plugins")}
 	apps := dashboardDesktopApps(cfg, cfg.Bridge.PluginDirs)
-	for _, appID := range []string{"codex", "hermes"} {
+	for _, appID := range []string{"codex", "hermes", "dsh"} {
 		item, ok := apps[appID].(map[string]any)
 		if !ok {
 			t.Fatalf("expected desktop app entry for %s, got %+v", appID, apps)

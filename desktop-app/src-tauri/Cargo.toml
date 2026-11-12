@@ -1,6 +1,6 @@
 [package]
 name = "prism-hub-desktop"
-version = "0.1.17"
+version = "0.1.21"
 description = "Prism Hub desktop shell"
 edition = "2021"
 rust-version = "1.77.2"
@@ -15,6 +15,7 @@ qrcode = "0.14.1"
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-process = "2"
+tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2.10.1"
 # Cargo.lock carries glib 0.18 (GHSA-wrw7-89jp-8q8g, unsound VariantStrIter)
 # as a Linux-only transitive dependency of tauri/wry. The shell never touches
