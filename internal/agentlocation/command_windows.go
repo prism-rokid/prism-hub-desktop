@@ -39,7 +39,7 @@ func PrepareService(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
-	cmd.SysProcAttr.CreationFlags |= 0x00000200 // CREATE_NEW_PROCESS_GROUP
+	cmd.SysProcAttr.CreationFlags |= 0x00000200 // 创建新的 Windows 进程组
 	cmd.SysProcAttr.HideWindow = true
 }
 func StopService(cmd *exec.Cmd, done <-chan struct{}) {

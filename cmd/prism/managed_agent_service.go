@@ -17,7 +17,7 @@ import (
 type managedAgentService struct {
 	cmd    *exec.Cmd
 	done   chan struct{}
-	err    error // published by closing done
+	err    error // 由关闭 done 发布
 	output serviceOutput
 }
 type serviceOutput struct {
