@@ -21,10 +21,24 @@ type runtimeLease struct {
 }
 
 type runtimeLeaseRecord struct {
-	PID          int    `json:"pid"`
-	PluginID     string `json:"plugin_id"`
-	SessionToken string `json:"session_token"`
+	PID             int    `json:"pid"`
+	PluginID        string `json:"plugin_id"`
+	SessionToken    string `json:"session_token"`
+	StartIdentifier string `json:"start_identifier,omitempty"`
+	ProcessGroupID  int    `json:"process_group_id,omitempty"`
 }
+
+type runtimeLeaseProcess struct {
+	Alive           bool
+	StartIdentifier string
+	Command         string
+	ProcessGroupID  int
+}
+
+var (
+	inspectRuntimeLeaseProcess   = runtimeLeaseProcessInspection
+	terminateRuntimeLeaseProcess = terminatePluginProcessPID
+)
 
 func prepareRuntimeLease(pluginID, sessionToken string) (*runtimeLease, error) {
 	pluginID = strings.TrimSpace(pluginID)
@@ -37,13 +51,19 @@ func prepareRuntimeLease(pluginID, sessionToken string) (*runtimeLease, error) {
 		return nil, err
 	}
 	if previous, ok := readRuntimeLease(path); ok {
-		if previous.PID > 0 && runtimeLeaseProcessAlive(previous.PID) {
-			if err := terminatePluginProcessPID(previous.PID); err != nil {
+		removable, shouldTerminate, err := runtimeLeaseRecoveryDecision(previous)
+		if err != nil {
+			return nil, fmt.Errorf("recover plugin runtime lease %s: %w", pluginID, err)
+		}
+		if shouldTerminate {
+			if err := terminateRuntimeLeaseProcess(previous.PID); err != nil {
 				return nil, fmt.Errorf("terminate stale plugin runtime pid %d: %w", previous.PID, err)
 			}
 		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return nil, err
+		if removable {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
 		}
 	}
 	return &runtimeLease{path: path, pluginID: pluginID, sessionToken: sessionToken}, nil
@@ -54,7 +74,20 @@ func (l *runtimeLease) claim(pid int) error {
 		return fmt.Errorf("invalid plugin runtime lease")
 	}
 	l.pid = pid
-	payload, err := json.Marshal(runtimeLeaseRecord{PID: pid, PluginID: l.pluginID, SessionToken: l.sessionToken})
+	process, err := inspectRuntimeLeaseProcess(pid)
+	if err != nil {
+		return fmt.Errorf("inspect plugin runtime process %d: %w", pid, err)
+	}
+	if process.StartIdentifier == "" {
+		return fmt.Errorf("plugin runtime process %d has no stable start identity", pid)
+	}
+	payload, err := json.Marshal(runtimeLeaseRecord{
+		PID:             pid,
+		PluginID:        l.pluginID,
+		SessionToken:    l.sessionToken,
+		StartIdentifier: process.StartIdentifier,
+		ProcessGroupID:  process.ProcessGroupID,
+	})
 	if err != nil {
 		return err
 	}
@@ -101,12 +134,61 @@ func readRuntimeLease(path string) (runtimeLeaseRecord, bool) {
 	return record, true
 }
 
+// runtimeLeaseRecoveryDecision 只在能够确认旧记录对应的进程身份时终止进程。
+// PID 被操作系统复用时，删除旧记录并继续启动；身份不明时保留记录而不是冒险终止。
+func runtimeLeaseRecoveryDecision(record runtimeLeaseRecord) (removable, shouldTerminate bool, err error) {
+	process, inspectErr := inspectRuntimeLeaseProcess(record.PID)
+	if inspectErr != nil {
+		return false, false, fmt.Errorf("inspect pid %d: %w", record.PID, inspectErr)
+	}
+	if !process.Alive {
+		return true, false, nil
+	}
+	if record.StartIdentifier != "" {
+		if process.StartIdentifier != record.StartIdentifier {
+			return true, false, nil
+		}
+		if record.ProcessGroupID != record.PID || process.ProcessGroupID != record.ProcessGroupID {
+			return false, false, fmt.Errorf("pid %d matches the lease identity but is not its isolated process group", record.PID)
+		}
+		return true, true, nil
+	}
+
+	// 旧版本未保存启动标识。仅当命令行仍能确认其属于同一个插件时才迁移回收。
+	matched, matchErr := runtimeLeaseCommandMatchesPlugin(process.Command, record.PluginID)
+	if matchErr != nil {
+		return false, false, fmt.Errorf("legacy pid %d cannot verify plugin identity: %w", record.PID, matchErr)
+	}
+	if !matched {
+		return true, false, nil
+	}
+	if process.ProcessGroupID != record.PID {
+		return false, false, fmt.Errorf("legacy pid %d matches the plugin command but is not its isolated process group", record.PID)
+	}
+	return true, true, nil
+}
+
+func runtimeLeaseCommandMatchesPlugin(command, pluginID string) (bool, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return false, fmt.Errorf("process command is unavailable")
+	}
+	label := pluginProcessLabel(pluginID)
+	entrypoint := filepath.Base(strings.Fields(command)[0])
+	if entrypoint == label || strings.HasPrefix(entrypoint, label+"-") {
+		return true, nil
+	}
+	return false, nil
+}
+
 // RuntimeLeaseInfo describes one persisted plugin runtime lease file.
 type RuntimeLeaseInfo struct {
-	Path         string
-	PluginID     string
-	PID          int
-	SessionToken string
+	Path            string
+	PluginID        string
+	PID             int
+	SessionToken    string
+	StartIdentifier string
+	ProcessGroupID  int
 }
 
 // RuntimeLeaseMatches re-reads the lease file and reports whether it still
@@ -115,11 +197,12 @@ type RuntimeLeaseInfo struct {
 func RuntimeLeaseMatches(info RuntimeLeaseInfo) bool {
 	record, ok := readRuntimeLease(info.Path)
 	return ok && record.PID == info.PID && record.PluginID == info.PluginID &&
-		record.SessionToken == info.SessionToken
+		record.SessionToken == info.SessionToken && record.StartIdentifier == info.StartIdentifier &&
+		record.ProcessGroupID == info.ProcessGroupID
 }
 
-// StaleRuntimeLeases returns lease records under dir whose recorded PID is no
-// longer alive. It only reads files; callers decide whether to clean up.
+// StaleRuntimeLeases 返回可安全移除的租约：进程已退出、PID 已复用，或可确认的旧格式记录。
+// 身份无法确认的活跃旧租约会被保留，避免误杀其他进程或启动重复实例。
 func StaleRuntimeLeases(dir string) []RuntimeLeaseInfo {
 	paths, err := filepath.Glob(filepath.Join(dir, "prism-plugin-*.json"))
 	if err != nil {
@@ -128,10 +211,21 @@ func StaleRuntimeLeases(dir string) []RuntimeLeaseInfo {
 	var stale []RuntimeLeaseInfo
 	for _, path := range paths {
 		record, ok := readRuntimeLease(path)
-		if !ok || record.PID <= 0 || runtimeLeaseProcessAlive(record.PID) {
+		if !ok || record.PID <= 0 {
 			continue
 		}
-		stale = append(stale, RuntimeLeaseInfo{Path: path, PluginID: record.PluginID, PID: record.PID, SessionToken: record.SessionToken})
+		removable, shouldTerminate, decisionErr := runtimeLeaseRecoveryDecision(record)
+		if decisionErr != nil || shouldTerminate || !removable {
+			continue
+		}
+		stale = append(stale, RuntimeLeaseInfo{
+			Path:            path,
+			PluginID:        record.PluginID,
+			PID:             record.PID,
+			SessionToken:    record.SessionToken,
+			StartIdentifier: record.StartIdentifier,
+			ProcessGroupID:  record.ProcessGroupID,
+		})
 	}
 	return stale
 }

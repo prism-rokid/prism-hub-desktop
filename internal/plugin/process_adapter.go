@@ -833,11 +833,11 @@ func pluginEnvironment(root string, manifest Manifest, sessionToken string, extr
 		// state/profile directories from these (for example opencode reads
 		// %USERPROFILE%\.local\state\opencode\service.json), and dropping
 		// them makes discovery silently fall back to a default endpoint.
-		"USERPROFILE":                    true,
-		"HOMEDRIVE":                      true,
-		"HOMEPATH":                       true,
-		"APPDATA":                        true,
-		"LOCALAPPDATA":                   true,
+		"USERPROFILE":  true,
+		"HOMEDRIVE":    true,
+		"HOMEPATH":     true,
+		"APPDATA":      true,
+		"LOCALAPPDATA": true,
 	}
 	env := make([]string, 0, len(allowed)+6)
 	for _, item := range os.Environ() {

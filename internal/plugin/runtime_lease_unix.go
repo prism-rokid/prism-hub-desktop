@@ -4,23 +4,17 @@ package plugin
 
 import (
 	"errors"
+	"fmt"
 	"syscall"
 )
-
-func runtimeLeaseProcessAlive(pid int) bool {
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
-}
 
 func terminatePluginProcessPID(pid int) error {
 	if pid <= 0 {
 		return nil
 	}
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err == nil || errors.Is(err, syscall.ESRCH) {
+	err := syscall.Kill(-pid, syscall.SIGKILL)
+	if err == nil || errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
-	}
-	return nil
+	return fmt.Errorf("terminate plugin process group %d: %w", pid, err)
 }

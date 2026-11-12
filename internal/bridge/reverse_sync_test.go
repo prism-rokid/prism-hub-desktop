@@ -1199,6 +1199,63 @@ func TestReverseSyncerPreservesLiveDetailSnapshot(t *testing.T) {
 	}
 }
 
+func TestReverseSyncerRepublishesDuplicateLiveDetailSnapshot(t *testing.T) {
+	db, err := bridgedb.Open(filepath.Join(t.TempDir(), "prism.sqlite"))
+	if err != nil {
+		t.Fatalf("Open db: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	record, err := db.UpsertSession(ctx, bridgedb.SessionRecord{
+		PrismConversationID: "conv-duplicate-live-detail",
+		PluginID:            "dsh",
+		NativeSessionID:     "native-duplicate-live-detail",
+		NativeThreadID:      "thread-duplicate-live-detail",
+		Surface:             "desktop",
+	})
+	if err != nil {
+		t.Fatalf("UpsertSession: %v", err)
+	}
+	sink := &recordingSink{}
+	syncer := &ReverseSyncer{
+		Config:          remoteAuthorizedConfig("dsh"),
+		Service:         pluginruntime.New(&reverseAdapter{id: "dsh"}),
+		DB:              db,
+		Sink:            sink,
+		DetailSnapshots: NewDetailSnapshotStore(),
+	}
+	target := reverseSyncTarget{
+		record: record,
+		session: pluginruntime.NativeSession{
+			PluginID: "dsh", NativeSessionID: record.NativeSessionID, NativeThreadID: record.NativeThreadID, Surface: "desktop",
+		},
+	}
+	event := pluginruntime.PluginEvent{
+		ID: "dsh:host:detail:native-duplicate-live-detail:live:projection", Type: "dsh.desktop.state.changed", Status: StageRunning,
+		Payload: map[string]any{"detail_snapshot": map[string]any{
+			"desktop_foreground": true, "detail_stale": false,
+			"current_model": map[string]any{"id": "deepseek:deepseek-chat", "label": "DeepSeek Chat"},
+		}},
+	}
+	syncer.handleEvent(ctx, target, event)
+	event.Payload["detail_snapshot"] = map[string]any{
+		"desktop_foreground": true, "detail_stale": false,
+		"current_model": map[string]any{"id": "deepseek:deepseek-flash", "label": "DeepSeek Flash"},
+	}
+	syncer.handleEvent(ctx, target, event)
+
+	if got := len(sink.conversationEvents()); got != 1 {
+		t.Fatalf("重复 watcher 事件不得重复转发会话事件，got=%d", got)
+	}
+	snapshots := sink.conversationDetailSnapshots()
+	if len(snapshots) != 2 {
+		t.Fatalf("重复 watcher 事件仍必须刷新实时详情，got=%+v", snapshots)
+	}
+	if model := asMap(snapshots[1]["current_model"]); model["id"] != "deepseek:deepseek-flash" {
+		t.Fatalf("重复 watcher 事件未发布最新模型：%+v", snapshots[1])
+	}
+}
+
 func TestReverseSyncerRebuildsIndexOnlyForPluginWideDirectoryReconciliation(t *testing.T) {
 	db, err := bridgedb.Open(filepath.Join(t.TempDir(), "prism.sqlite"))
 	if err != nil {

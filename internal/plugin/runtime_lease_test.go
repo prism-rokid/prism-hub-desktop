@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,8 +11,28 @@ import (
 	"rokid-prism-hub/internal/host"
 )
 
+func stubRuntimeLeaseProcessInspection(t *testing.T, inspect func(int) (runtimeLeaseProcess, error)) {
+	t.Helper()
+	previous := inspectRuntimeLeaseProcess
+	inspectRuntimeLeaseProcess = inspect
+	t.Cleanup(func() { inspectRuntimeLeaseProcess = previous })
+}
+
+func stubRuntimeLeaseTermination(t *testing.T, terminate func(int) error) {
+	t.Helper()
+	previous := terminateRuntimeLeaseProcess
+	terminateRuntimeLeaseProcess = terminate
+	t.Cleanup(func() { terminateRuntimeLeaseProcess = previous })
+}
+
 func TestRuntimeLeaseClaimsAndReleasesOnlyItsOwnRecord(t *testing.T) {
 	t.Setenv(host.PrismDataDirEnv, t.TempDir())
+	stubRuntimeLeaseProcessInspection(t, func(pid int) (runtimeLeaseProcess, error) {
+		if pid != 12345 {
+			return runtimeLeaseProcess{}, fmt.Errorf("unexpected pid %d", pid)
+		}
+		return runtimeLeaseProcess{Alive: true, StartIdentifier: "2026-11-10 10:00:00"}, nil
+	})
 	lease, err := prepareRuntimeLease("demo", "session-1")
 	if err != nil {
 		t.Fatal(err)
@@ -28,6 +49,9 @@ func TestRuntimeLeaseClaimsAndReleasesOnlyItsOwnRecord(t *testing.T) {
 func TestRuntimeLeaseDropsDeadStaleRecord(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv(host.PrismDataDirEnv, base)
+	stubRuntimeLeaseProcessInspection(t, func(int) (runtimeLeaseProcess, error) {
+		return runtimeLeaseProcess{}, nil
+	})
 	path := filepath.Join(base, "runtime", "plugins", "prism-plugin-demo.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -48,6 +72,120 @@ func TestRuntimeLeaseDropsDeadStaleRecord(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("stale lease was not removed: %v", err)
+	}
+}
+
+func TestRuntimeLeasePIDReuseRemovesRecordWithoutTerminatingReplacement(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv(host.PrismDataDirEnv, base)
+	path := filepath.Join(base, "runtime", "plugins", "prism-plugin-codex.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(runtimeLeaseRecord{
+		PID:             4242,
+		PluginID:        "codex",
+		SessionToken:    "old",
+		StartIdentifier: "2026-11-10 09:00:00",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubRuntimeLeaseProcessInspection(t, func(pid int) (runtimeLeaseProcess, error) {
+		if pid != 4242 {
+			return runtimeLeaseProcess{}, fmt.Errorf("unexpected pid %d", pid)
+		}
+		return runtimeLeaseProcess{Alive: true, StartIdentifier: "2026-11-10 11:00:00", Command: "trustd"}, nil
+	})
+	terminated := false
+	stubRuntimeLeaseTermination(t, func(pid int) error {
+		terminated = true
+		return nil
+	})
+	if _, err := prepareRuntimeLease("codex", "new"); err != nil {
+		t.Fatal(err)
+	}
+	if terminated {
+		t.Fatal("PID reuse must not terminate the replacement process")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("reused PID lease should be removed: %v", err)
+	}
+}
+
+func TestRuntimeLeaseLegacyRecordOnlyTerminatesVerifiedPlugin(t *testing.T) {
+	record := runtimeLeaseRecord{PID: 4242, PluginID: "codex", SessionToken: "legacy"}
+	t.Run("verified plugin", func(t *testing.T) {
+		stubRuntimeLeaseProcessInspection(t, func(int) (runtimeLeaseProcess, error) {
+			return runtimeLeaseProcess{Alive: true, Command: "/Applications/Codex.app/Contents/MacOS/prism-plugin-codex-desktop", ProcessGroupID: 4242}, nil
+		})
+		removable, terminate, err := runtimeLeaseRecoveryDecision(record)
+		if err != nil || !removable || !terminate {
+			t.Fatalf("verified legacy lease decision = (%v, %v, %v)", removable, terminate, err)
+		}
+	})
+	t.Run("unrelated process", func(t *testing.T) {
+		stubRuntimeLeaseProcessInspection(t, func(int) (runtimeLeaseProcess, error) {
+			return runtimeLeaseProcess{Alive: true, Command: "trustd"}, nil
+		})
+		removable, terminate, err := runtimeLeaseRecoveryDecision(record)
+		if err != nil || !removable || terminate {
+			t.Fatalf("unrelated legacy lease decision = (%v, %v, %v)", removable, terminate, err)
+		}
+	})
+}
+
+func TestRuntimeLeaseMatchingStartRequiresItsOwnProcessGroup(t *testing.T) {
+	record := runtimeLeaseRecord{
+		PID:             4242,
+		PluginID:        "codex",
+		SessionToken:    "old",
+		StartIdentifier: "darwin:1:2",
+		ProcessGroupID:  4242,
+	}
+	stubRuntimeLeaseProcessInspection(t, func(int) (runtimeLeaseProcess, error) {
+		return runtimeLeaseProcess{
+			Alive:           true,
+			StartIdentifier: "darwin:1:2",
+			ProcessGroupID:  9000,
+		}, nil
+	})
+	removable, terminate, err := runtimeLeaseRecoveryDecision(record)
+	if err == nil || removable || terminate {
+		t.Fatalf("process group mismatch decision = (%v, %v, %v)", removable, terminate, err)
+	}
+}
+
+func TestRuntimeLeaseLegacyRecordDoesNotMatchPluginPathArgument(t *testing.T) {
+	record := runtimeLeaseRecord{PID: 4242, PluginID: "codex", SessionToken: "legacy"}
+	stubRuntimeLeaseProcessInspection(t, func(int) (runtimeLeaseProcess, error) {
+		return runtimeLeaseProcess{
+			Alive:          true,
+			Command:        "node /tmp/prism-plugin-codex-desktop/index.js",
+			ProcessGroupID: 4242,
+		}, nil
+	})
+	removable, terminate, err := runtimeLeaseRecoveryDecision(record)
+	if err != nil || !removable || terminate {
+		t.Fatalf("plugin path argument decision = (%v, %v, %v)", removable, terminate, err)
+	}
+}
+
+func TestRuntimeLeaseLegacyPluginWithSharedProcessGroupBlocksReplacement(t *testing.T) {
+	record := runtimeLeaseRecord{PID: 4242, PluginID: "codex", SessionToken: "legacy"}
+	stubRuntimeLeaseProcessInspection(t, func(int) (runtimeLeaseProcess, error) {
+		return runtimeLeaseProcess{
+			Alive:          true,
+			Command:        "prism-plugin-codex-desktop index.js",
+			ProcessGroupID: 9000,
+		}, nil
+	})
+	removable, terminate, err := runtimeLeaseRecoveryDecision(record)
+	if err == nil || removable || terminate {
+		t.Fatalf("legacy shared process group decision = (%v, %v, %v)", removable, terminate, err)
 	}
 }
 
@@ -100,6 +238,9 @@ func TestStartProcessRuntimeSkipsLeaseForVerificationProcesses(t *testing.T) {
 }
 
 func TestCleanupStaleRuntimeLeases(t *testing.T) {
+	stubRuntimeLeaseProcessInspection(t, func(int) (runtimeLeaseProcess, error) {
+		return runtimeLeaseProcess{}, nil
+	})
 	dir := filepath.Join(t.TempDir(), "runtime", "plugins")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)

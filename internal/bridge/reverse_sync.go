@@ -448,6 +448,9 @@ func (s *ReverseSyncer) handleEvent(ctx context.Context, target reverseSyncTarge
 		s.warn("persist reverse sync event failed", "plugin_id", target.session.PluginID, "err", persistErr)
 		return
 	}
+	// 详情和目录投影反映当前桌面状态，不能因历史事件已持久化而跳过。
+	// 否则 Hub 重启后收到 ID 稳定的 watcher 首帧时，Panel 会永久保留过期详情。
+	s.publishWatcherProjection(target, event)
 	if durable {
 		if s.DB == nil || strings.TrimSpace(target.record.ID) == "" {
 			return
@@ -564,6 +567,12 @@ func (s *ReverseSyncer) handleEvent(ctx context.Context, target reverseSyncTarge
 			"status", event.Status,
 		)
 	}
+}
+
+// publishWatcherProjection 将 watcher 的当前状态写入实时快照和会话目录。
+// 此路径与事件日志去重分离：同一事件 ID 可以只转发一次，但每次重连都必须
+// 恢复最新前台详情，否则严格实时 UI 会错误保持只读。
+func (s *ReverseSyncer) publishWatcherProjection(target reverseSyncTarget, event pluginruntime.PluginEvent) {
 	publisher := s.snapshotPublisher()
 	if publisher == nil {
 		return
