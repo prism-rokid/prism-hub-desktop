@@ -32,6 +32,8 @@ login.credentials_mismatch,账号或密码不匹配，请检查后重试。,Acco
 login.register_account,注册账号,Register account,アカウントを登録
 login.username_placeholder,手机号、邮箱或用户名,"Phone, email, or username",電話番号、メール、またはユーザー名
 login.password_placeholder,请输入密码,Enter your password,パスワードを入力
+login.checking_session,正在检查登录状态…,Checking sign-in status…,ログイン状態を確認中…
+login.checking_timeout,登录状态检查超时，请重试。,Sign-in status check timed out. Please try again.,ログイン状態の確認がタイムアウトしました。再試行してください。
 status.hub,Hub,Hub,Hub
 status.server,服务器,Server,サーバー
 status.host_plugin_sync,Host Plugin,Host Plugin,Host Plugin
@@ -215,6 +217,10 @@ login.signing_in,正在登录并绑定设备…,Signing in and linking this devi
 login.success,登录成功,Signed in,ログインしました
 login.starting_hub,正在启动 Hub 并连接服务器…,Starting Hub and connecting to the server…,Hub を起動してサーバーに接続中…
 login.startup_delayed,登录已成功，但 Hub 连接尚未就绪。请检查上方连接状态或点击刷新连接。,Signed in but Hub is not ready yet. Check the connection status above or refresh the connection.,ログイン済みですが Hub の接続がまだ完了していません。上部の接続状態を確認するか接続を更新してください。
+login.connection_pending_title,服务器连接尚未就绪,Server connection is not ready yet,サーバー接続の準備がまだ完了していません
+login.connection_pending,正在恢复服务器连接，请稍候。,Restoring the server connection. Please wait.,サーバー接続を復元しています。しばらくお待ちください。
+login.retry_connection,重新连接,Reconnect,再接続
+login.open_diagnostics,查看诊断,View diagnostics,診断を表示
 location.action,定位 Agent,Locate Agent,Agent の場所を指定
 location.title,定位 {name},Locate {name},{name} の場所を指定
 location.directory,安装文件夹,Installation folder,インストールフォルダー

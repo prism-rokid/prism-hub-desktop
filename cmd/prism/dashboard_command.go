@@ -4370,13 +4370,22 @@ func openDashboardLaunchLog() (*os.File, error) {
 
 func writeDashboardPasswordLoginError(w http.ResponseWriter, err error) {
 	var responseError *prismapi.ResponseError
-	if errors.As(err, &responseError) && responseError.Code == "C100500" {
+	if errors.As(err, &responseError) && dashboardCredentialErrorCode(responseError.Code) {
 		writeDashboardJSON(w, http.StatusBadRequest, map[string]any{
 			"ok":         false,
 			"error":      "账号或密码不匹配，请检查后重试。",
-			"error_code": "C100500",
+			"error_code": strings.TrimSpace(responseError.Code),
 		})
 		return
 	}
 	writeDashboardError(w, http.StatusBadRequest, err.Error())
+}
+
+func dashboardCredentialErrorCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "c100500", "invalid_credentials", "invalid_credential", "invalid_password", "wrong_password", "password_error", "account_not_found", "user_not_found", "authentication_failed":
+		return true
+	default:
+		return false
+	}
 }

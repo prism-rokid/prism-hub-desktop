@@ -1227,6 +1227,21 @@
       margin-top: 24px;
     }
 
+    .login-bootstrap-status {
+      min-height: 20px;
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .login-bootstrap-status[hidden] { display: none; }
+
+    .login-page[data-login-state="checking"] .login-form {
+      visibility: hidden;
+      pointer-events: none;
+    }
+
     .login-form[aria-busy="true"] {
       pointer-events: none;
     }
@@ -2961,13 +2976,14 @@
 <body>
   <div class="app auth-mode">
     <main class="viewport">
-      <section class="page login-page active" data-page="login">
+      <section class="page login-page active" data-page="login" data-login-state="checking">
         <div class="login-brand" aria-label="Prism HUB">
           <div class="login-logo">
             <img class="login-logo-image" src="/assets/prism_logo_nobg@2x.png" alt="">
           </div>
           <strong class="login-wordmark">Prism HUB</strong>
         </div>
+        <div class="login-bootstrap-status" id="login-bootstrap-status" role="status" aria-live="polite" data-i18n="login.checking_session">正在检查登录状态…</div>
         <form class="login-form" id="login-form" autocomplete="on">
           <div class="field">
             <label data-i18n="login.region">Region</label>
@@ -3006,7 +3022,11 @@
 
       <section class="page" data-page="dashboard">
         <div id="login-transition-status" class="agent-recovery-notice" role="status" aria-live="polite" hidden>
-          <div class="agent-recovery-notice-copy"><strong data-i18n="login.success">登录成功</strong><span id="login-transition-detail"></span></div>
+          <div class="agent-recovery-notice-copy"><strong data-i18n="login.connection_pending_title">服务器连接尚未就绪</strong><span id="login-transition-detail" data-i18n="login.connection_pending">正在恢复服务器连接，请稍候。</span></div>
+          <div class="agent-recovery-notice-actions">
+            <button class="recovery-action" id="login-transition-refresh" type="button"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="login.retry_connection">重新连接</span></button>
+            <button class="recovery-action" id="login-transition-doctor" type="button"><i data-lucide="stethoscope" aria-hidden="true"></i><span data-i18n="login.open_diagnostics">查看诊断</span></button>
+          </div>
         </div>
         <section class="compact-header">
           <div class="compact-chain">
@@ -3300,9 +3320,13 @@
       toastTimer: null,
       reauthRequired: false,
       loginSubmitting: false,
-      loginTransition: loginHandoffPending,
+      loginTransition: false,
       loginHandoff: loginHandoffPending,
       loginTransitionTimer: null,
+      loginConnectionNoticeTimer: null,
+      loginRecoveryGraceUntil: 0,
+      loginBootstrapTimer: null,
+      statusReady: false,
       authRevision: 0,
       confirmationResolve: null,
       confirmationPreviousFocus: null,
@@ -3496,16 +3520,29 @@
 
     function dashboardRequestMessage(error, fallback = t("error.request_failed")) {
       const message = String(error?.message || error || "").trim();
-      if (!message || message === "Failed to fetch" || /networkerror|network request failed/i.test(message)) {
+      if (!message || /^(failed to fetch|load failed)$/i.test(message) || /networkerror|network request failed/i.test(message)) {
         return t("error.connection_lost");
       }
       return message || fallback;
     }
 
+    function suppressTransientConnectionError() {
+      return Boolean(
+        state.awaitingHubRestart ||
+        state.loginHandoff ||
+        Date.now() < Number(state.loginRecoveryGraceUntil || 0),
+      );
+    }
+
     function runDashboardAction(messageElementId, action) {
       Promise.resolve()
         .then(action)
-        .catch((error) => setScopedMessage(messageElementId, dashboardRequestMessage(error), "err"));
+        .catch((error) => {
+          // 登录和 sidecar 重启期间本地端口会短暂不可用，这是预期过程，
+          // 不向用户弹出后台请求的底层网络错误。
+          if (suppressTransientConnectionError()) return;
+          setScopedMessage(messageElementId, dashboardRequestMessage(error), "err");
+        });
     }
 
     function pluginModeFor(config, pluginId) {
@@ -3645,7 +3682,8 @@
       const toggle = document.getElementById("agent-recovery-notices-toggle");
       if (!container || !list || !toggle) return;
       const notices = [];
-      if (!cloudConnectionUsable(data)) {
+      const loginRecoveryActive = Date.now() < Number(state.loginRecoveryGraceUntil || 0);
+      if (!loginRecoveryActive && !cloudConnectionUsable(data)) {
         const detail = state.browserOnline
           ? (String(data.connection_detail || "").trim() || t("recovery.server_disconnected_detail"))
           : t("recovery.browser_offline_detail");
@@ -4240,6 +4278,13 @@
 
     function applyStatus(data, { force = false } = {}) {
       state.lastStatus = data;
+      state.statusReady = true;
+      window.clearTimeout(state.loginBootstrapTimer);
+      state.loginBootstrapTimer = null;
+      const loginPage = document.querySelector('.login-page[data-page="login"]');
+      const loginBootstrapStatus = document.getElementById("login-bootstrap-status");
+      if (loginPage) loginPage.dataset.loginState = "ready";
+      if (loginBootstrapStatus) loginBootstrapStatus.hidden = true;
       const fingerprint = statusRenderFingerprint(data);
       if (!force && fingerprint === state.statusRenderFingerprint) return;
       state.statusRenderFingerprint = fingerprint;
@@ -4265,7 +4310,9 @@
       const desktopLifecycle = String(state.desktopHubLifecycle || "").toLowerCase();
       const hubState = data.hub_running
         ? "running"
-        : (desktopLifecycle === "starting" ? "starting" : "not_running");
+        : (desktopLifecycle === "running" || desktopLifecycle === "starting"
+          ? desktopLifecycle
+          : (data.login_bootstrap ? "starting" : "not_running"));
       const hubLabel = hubState === "running"
         ? t("status.running")
         : (hubState === "starting" ? t("status.starting") : t("status.not_running"));
@@ -4281,7 +4328,7 @@
       for (const id of ["hub-icon", "server-icon", "host-plugin-sync-icon"]) {
         const icon = document.getElementById(id);
         const healthy = id === "hub-icon"
-          ? data.hub_running
+          ? hubState !== "not_running"
           : (id === "server-icon" ? cloudConnectionUsable(data) : hostPluginSync.healthy);
         icon.classList.toggle("warning", !healthy);
       }
@@ -4304,9 +4351,7 @@
       renderPluginCards(data);
 
       const authenticationStillRequired = ["auth_expired", "unauthorized"].includes(String(data.connection_state || "").toLowerCase());
-      if (state.loginTransition && !state.awaitingHubRestart && (cloudConnectionActive(data) || authenticationStillRequired)) {
-        finishLoginTransition();
-      }
+      if (cloudConnectionActive(data) || authenticationStillRequired || !loginReady) finishLoginTransition();
       // A doctor-degraded status (for example a broken config) must keep the
       // dashboard visible so the diagnostics panel stays reachable.
       const degraded = doctorStatusDegraded(data);
@@ -4376,9 +4421,10 @@
       }
     }
 
-    async function refreshAll({ automatic = false, forceStatus = false } = {}) {
-      if (state.refreshInFlight) return state.refreshInFlight;
-      state.refreshInFlight = (async () => {
+    async function refreshAll({ automatic = false, forceStatus = false, forceFresh = false } = {}) {
+      if (state.refreshInFlight && !forceFresh) return state.refreshInFlight;
+      let refreshPromise;
+      refreshPromise = (async () => {
         await loadStatus({ force: forceStatus || !automatic });
         await loadHostPlugins({ force: !automatic });
         // Reports change independently of the main status fingerprint.
@@ -4386,8 +4432,11 @@
         if (state.doctorPanelOpen && !state.doctorRunning) {
           await loadDoctorReport().catch(() => {});
         }
-      })().finally(() => { state.refreshInFlight = null; });
-      return state.refreshInFlight;
+      })().finally(() => {
+        if (state.refreshInFlight === refreshPromise) state.refreshInFlight = null;
+      });
+      state.refreshInFlight = refreshPromise;
+      return refreshPromise;
     }
 
     function pluginCatalogIcon(item) {
@@ -4931,36 +4980,55 @@
       }
     }
 
-    function finishLoginTransition() {
+    function finishLoginTransition(message = "") {
       state.loginTransition = false;
       window.clearTimeout(state.loginTransitionTimer);
       state.loginTransitionTimer = null;
-      document.getElementById("login-transition-status").hidden = true;
+      window.clearTimeout(state.loginConnectionNoticeTimer);
+      state.loginConnectionNoticeTimer = null;
+      const notice = document.getElementById("login-transition-status");
+      if (notice) notice.hidden = true;
+      if (message) showToast(message, "err");
     }
 
-    function beginLoginTransition(data) {
+    function showLoginConnectionNotice(detail = "") {
+      if (!state.lastStatus?.logged_in || cloudConnectionActive() || state.awaitingHubRestart) return;
+      const notice = document.getElementById("login-transition-status");
+      const detailElement = document.getElementById("login-transition-detail");
+      if (!notice || !detailElement) return;
+      detailElement.textContent = detail || t("login.connection_pending");
+      notice.hidden = false;
+    }
+
+    function scheduleLoginConnectionNotice() {
+      window.clearTimeout(state.loginConnectionNoticeTimer);
+      state.loginConnectionNoticeTimer = null;
+      if (state.lastStatus?.logged_in && cloudConnectionActive()) return;
+      state.loginConnectionNoticeTimer = window.setTimeout(() => {
+        state.loginConnectionNoticeTimer = null;
+        showLoginConnectionNotice(t("login.startup_delayed"));
+      }, 8_000);
+    }
+
+    function beginLoginSuccess(data) {
       state.authRevision++;
-      state.loginTransition = true;
+      state.loginTransition = false;
       state.reauthRequired = false;
+      state.loginRecoveryGraceUntil = Date.now() + 12_000;
       state.lastHostPlugins = null;
       state.lastHostPluginsAt = 0;
-      window.clearTimeout(state.loginTransitionTimer);
-      document.getElementById("login-transition-status").hidden = false;
-      document.getElementById("login-transition-detail").textContent = t("login.starting_hub");
+      finishLoginTransition();
       // 先切换可见页面，再渲染完整 Dashboard 状态。状态渲染可能包含多张
       // Agent 卡片，不能让成功登录停留在已清空或冻结的表单上。
       switchPage("dashboard");
       applyStatus({
         ...(state.lastStatus || {}),
-        ok: true, logged_in: true, host_token_set: true, remote_control_ready: false,
+        ok: true, login_bootstrap: true, logged_in: true, host_token_set: true, remote_control_ready: false,
         account: data.account || {}, connection_state: "connecting", connection_label: t("status.connecting"),
         connection_detail: t("login.starting_hub"), host_plugin_sync_state: "syncing",
       }, { force: true });
-      // One bounded deadline; a delayed restart must never look like a login failure.
-      state.loginTransitionTimer = window.setTimeout(() => {
-        state.loginTransitionTimer = null;
-        document.getElementById("login-transition-detail").textContent = t("login.startup_delayed");
-      }, 60_000);
+      showToast(t("login.success"), "ok");
+      scheduleLoginConnectionNotice();
     }
 
     async function submitPasswordLogin() {
@@ -4974,6 +5042,11 @@
       }
       const button = document.getElementById("password-login-btn");
       const form = document.getElementById("login-form");
+      // 使登录前已经发出的状态请求和 settle 请求失效，避免失败结果被旧
+      // 的 logged_in=true 快照覆盖。
+      state.authRevision++;
+      state.reauthRequired = true;
+      cancelStatusSettle();
       state.loginSubmitting = true;
       button.disabled = true;
       button.setAttribute("aria-busy", "true");
@@ -4988,20 +5061,20 @@
         });
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error_code === "C100500" ? t("login.credentials_mismatch") : (data.error || "账号密码登录失败"));
-        beginLoginTransition(data);
+        beginLoginSuccess(data);
         // 仅在 Dashboard 可见后清除密码。成功前保留表单内容，避免空登录页闪现。
         document.getElementById("login-password").value = "";
         if (hubRestartScheduled(data)) {
-          handleScheduledHubRestart();
+          handleScheduledHubRestart({ preserveLoginHandoff: true });
           return data;
         }
         // Authentication has succeeded: subsequent startup errors belong to
         // the Dashboard, never to the login form.
         try {
-          await refreshAll();
+          await refreshAll({ forceStatus: true, forceFresh: true });
           scheduleStatusSettle(() => cloudConnectionActive());
         } catch (error) {
-          document.getElementById("login-transition-detail").textContent = dashboardRequestMessage(error);
+          showLoginConnectionNotice(dashboardRequestMessage(error));
         }
         const scan = data.local_plugin_scan;
         if (scan && scan.ok === false) {
@@ -5531,8 +5604,8 @@
 
     // Hands the restart window to a dedicated recovery flow so the page never
     // keeps rendering the pre-action snapshot waiting for a manual refresh.
-    function handleScheduledHubRestart() {
-      if (state.loginTransition) {
+    function handleScheduledHubRestart({ preserveLoginHandoff = false } = {}) {
+      if (preserveLoginHandoff || state.loginTransition || (state.page === "dashboard" && state.lastStatus?.logged_in)) {
         try { sessionStorage.setItem("prism.dashboard.login-handoff", "1"); } catch {}
       }
       state.awaitingHubRestart = true;
@@ -5560,6 +5633,7 @@
             await loadStatus({ force: true });
             state.awaitingHubRestart = false;
             if (cloudConnectionActive()) finishLoginTransition();
+            else if (state.lastStatus?.logged_in) scheduleLoginConnectionNotice();
             await loadHostPlugins({ force: true });
             // The Realtime connection is re-established by the new process;
             // keep sampling until the header settles on connected.
@@ -5742,6 +5816,13 @@
     });
     document.getElementById("drawer-backdrop").addEventListener("click", closeDrawer);
     document.getElementById("refresh-btn").addEventListener("click", () => runDashboardAction("home-message", refreshDashboard));
+    document.getElementById("login-transition-refresh")?.addEventListener("click", () => runDashboardAction("home-message", async () => {
+      const detail = document.getElementById("login-transition-detail");
+      if (detail) detail.textContent = t("login.connection_pending");
+      await refreshDashboard({ notify: false });
+      if (cloudConnectionActive()) finishLoginTransition();
+    }));
+    document.getElementById("login-transition-doctor")?.addEventListener("click", openDoctorPanel);
     document.getElementById("agent-recovery-notices-toggle")?.addEventListener("click", () => {
       state.recoveryNoticesCollapsed = !state.recoveryNoticesCollapsed;
       if (state.lastStatus) renderAgentRecoveryNotices(state.lastStatus);
@@ -5811,15 +5892,22 @@
       });
     });
     setTheme(loadTheme());
+    state.loginBootstrapTimer = window.setTimeout(() => {
+      if (state.statusReady) return;
+      state.loginBootstrapTimer = null;
+      const page = document.querySelector('.login-page[data-page="login"]');
+      const message = document.getElementById("login-bootstrap-status");
+      if (page) page.dataset.loginState = "ready";
+      if (message) {
+        message.hidden = false;
+        message.textContent = t("login.checking_timeout");
+      }
+    }, 8_000);
     if (loginHandoffPending) {
-      // sidecar 重启会重新加载 iframe，恢复登录交接态，避免短暂显示空登录页。
+      // sidecar 重启会重新加载 iframe，直接进入 Dashboard；连接状态由顶部状态区展示。
+      state.loginTransition = false;
       switchPage("dashboard");
-      document.getElementById("login-transition-status").hidden = false;
-      document.getElementById("login-transition-detail").textContent = t("login.starting_hub");
-      state.loginTransitionTimer = window.setTimeout(() => {
-        state.loginTransitionTimer = null;
-        document.getElementById("login-transition-detail").textContent = t("login.startup_delayed");
-      }, 60_000);
+      scheduleLoginConnectionNotice();
     }
     startAutoRefresh();
     runDashboardAction("home-message", refreshAll);

@@ -350,15 +350,20 @@ func recoverLocatedAgent(parent context.Context, configPath, id, mode string, ca
 				result.Error = "Unknown desktop app"
 				return
 			}
-			// 恢复流程不会终止用户已经运行的桌面进程。
+			// 恢复流程不会终止已经运行的桌面进程。进程可能刚由托管启动完成，
+			// 但 CDP 和插件运行时仍在异步初始化，因此这里保留等待探测的机会。
 			if processes, processErr := dashboardDesktopProcessesWithError(appSpec); processErr != nil {
 				result.Error = processErr.Error()
 				return
 			} else if len(processes) > 0 {
-				result.Error = "Agent is already running; close it and retry managed launch"
-				return
+				// 已存在的进程由下面的统一探测循环等待连接收敛，避免把
+				// “进程已启动但 CDP 尚未发布”误报成需要关闭进程。
+			} else {
+				_, launchErr := dashboardStartManagedDesktopAppWithoutStop(cfg, appSpec)
+				if launchErr != nil && !strings.Contains(strings.ToLower(launchErr.Error()), "is running") {
+					err = launchErr
+				}
 			}
-			_, err = dashboardStartManagedDesktopAppWithoutStop(cfg, appSpec)
 		} else {
 			err = startManagedService(ctx, installed.Manifest, spec, nil, cfg)
 		}

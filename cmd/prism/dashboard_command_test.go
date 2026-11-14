@@ -495,7 +495,7 @@ func TestDashboardRecoveryActionResources(t *testing.T) {
 		`function scheduleStatusSettle(`,
 		`function scheduleReloaderSettle()`,
 		`function hubRestartScheduled(payload)`,
-		`function handleScheduledHubRestart()`,
+		`function handleScheduledHubRestart({`,
 		`function watchForHubReturn(`,
 		`function refreshAfterDashboardMutation(payload)`,
 		`scheduleStatusSettle(() => cloudConnectionActive())`,
@@ -2079,7 +2079,7 @@ func TestDashboardRestartCanBeDelegatedToDesktopShell(t *testing.T) {
 }
 
 func TestDashboardPasswordLoginError(t *testing.T) {
-	for _, code := range []string{"C100500", "other_server_error"} {
+	for _, code := range []string{"C100500", "invalid_credentials", "other_server_error"} {
 		upstream := &prismapi.ResponseError{Status: "500 Internal Server Error", Code: code, Message: "系统异常"}
 		err := fmt.Errorf("prism bind login failed: %w", upstream)
 		recorder := httptest.NewRecorder()
@@ -2095,7 +2095,7 @@ func TestDashboardPasswordLoginError(t *testing.T) {
 		if recorder.Code != http.StatusBadRequest || payload.OK {
 			t.Fatal("expected failed login")
 		}
-		if code == "C100500" {
+		if code == "C100500" || code == "invalid_credentials" {
 			if payload.Code != code || payload.Error != "账号或密码不匹配，请检查后重试。" {
 				t.Fatalf("unexpected mismatch error: %+v", payload)
 			}
