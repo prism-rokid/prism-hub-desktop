@@ -72,6 +72,15 @@ func TestCanonicalDetailSnapshotUsesOnlyCanonicalFields(t *testing.T) {
 	}
 }
 
+func TestCanonicalDetailSnapshotPreservesExplicitNonInterruptibleRun(t *testing.T) {
+	base := map[string]any{"run": map[string]any{"status": "running", "interruptible": true}}
+	live := map[string]any{"run": map[string]any{"status": "running", "interruptible": false}}
+	run := asMap(canonicalDetailSnapshot(base, live, "")["run"])
+	if run["status"] != "running" || run["interruptible"] != false {
+		t.Fatalf("expected current running state with interruption disabled, got %v", run)
+	}
+}
+
 func TestCanonicalTerminalDetailAndCacheFailClosed(t *testing.T) {
 	base := map[string]any{"plugin_id": "claudecode", "conversation_id": "conv-1"}
 	live := map[string]any{"terminal": map[string]any{

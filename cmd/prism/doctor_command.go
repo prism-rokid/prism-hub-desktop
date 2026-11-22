@@ -139,7 +139,7 @@ func doctorManagedApps(configPath string) []doctor.ManagedAppSnapshot {
 			Running:        doctorBoolField(detail, "running"),
 			CDPReachable:   doctorBoolField(detail, "cdp_reachable"),
 		}
-		if spec, ok := dashboardDesktopAppSpecByID(appID); ok {
+		if spec, ok := configuredDesktopApp(cfg, appID); ok {
 			snapshot.PluginID = spec.PluginID
 		}
 		snapshots = append(snapshots, snapshot)

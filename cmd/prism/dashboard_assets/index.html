@@ -4099,7 +4099,7 @@
                   <strong>${t("agent.enable_remote")}</strong>
                 </div>
               </div>
-              <input class="switch" type="checkbox" data-local-remote-enabled="${escapeHtml(pluginId)}" ${remoteEnabled ? "checked" : ""} ${runtimeUnavailable ? "disabled" : ""}>
+              <input class="switch" type="checkbox" data-local-remote-enabled="${escapeHtml(pluginId)}" ${remoteEnabled ? "checked" : ""} ${runtimeUnavailable || state.recoveryActions.has(`remote-enable:${pluginId}`) ? "disabled" : ""}>
             </label>
             <button class="menu-action" type="button" data-edit-agent="${escapeHtml(pluginId)}">
               <i data-lucide="pencil" aria-hidden="true"></i>
@@ -5211,21 +5211,35 @@
     }
 
     async function updateLocalRemoteEnabled(toggle) {
-      const pluginId = String(toggle?.dataset.localRemoteEnabled || toggle?.dataset.remoteEnabled || "").trim();
+      const pluginId = String(toggle?.dataset.localRemoteEnabled || toggle?.dataset.remoteEnabled || toggle?.dataset.recoveryPlugin || "").trim();
       if (!pluginId) return;
-      const previous = !toggle.checked;
+      const key = `remote-enable:${pluginId}`;
+      const enabled = toggle.checked;
+      // Keep the visible input aligned with the registered state until the
+      // server confirms the change, even if a status refresh replaces it.
+      toggle.checked = Boolean(hostPluginFor(pluginId));
+      if (state.recoveryActions.has(key)) return;
+      state.recoveryActions.add(key);
       toggle.disabled = true;
+      refreshRecoveryControls();
       setScopedMessage("plugins-message", `正在更新 ${pluginId} 的远程状态…`);
       try {
-        await updateHostPlugin(pluginId, toggle.checked);
+        const desktop = state.lastStatus?.desktop_apps?.[pluginId];
+        if (enabled && desktop?.bind_before_remote_enable && desktop.can_launch_managed && !desktop.cdp_reachable) {
+          if (!await launchDesktopApp(desktop.app_id, { notify: false })) return;
+        }
+        await updateHostPlugin(pluginId, enabled);
+        await refreshAll({ forceStatus: true, forceFresh: true });
         setScopedMessage("plugins-message", `已更新 ${pluginId} 的远程状态。`, "ok");
-        await refreshAll();
         scheduleReloaderSettle();
       } catch (error) {
-        toggle.checked = previous;
-        throw error;
+        setScopedMessage("plugins-message", dashboardRequestMessage(error), "err");
       } finally {
+        state.recoveryActions.delete(key);
+        toggle.checked = Boolean(hostPluginFor(pluginId));
         toggle.disabled = false;
+        if (state.lastStatus) applyStatus(state.lastStatus, { force: true });
+        refreshRecoveryControls();
       }
     }
 
@@ -5297,12 +5311,6 @@
       return String(plugin?.display_name || pluginId || "Agent");
     }
 
-    async function enableRemoteRecovery(pluginId) {
-      await updateHostPlugin(pluginId, true);
-      await refreshAll();
-      scheduleReloaderSettle();
-    }
-
     function bindRecoveryControls(root = document) {
       root.querySelectorAll(".recovery-control").forEach((control) => {
         if (control.dataset.recoveryControlBound === "true") return;
@@ -5363,12 +5371,8 @@
         toggle.dataset.recoveryToggleBound = "true";
         toggle.addEventListener("change", (event) => {
           event.stopPropagation();
-          const key = toggle.dataset.recoveryKey || "remote-enable";
-          const pluginId = toggle.dataset.recoveryPlugin;
           if (toggle.dataset.recoveryToggle !== "remote-enabled" || !toggle.checked) return;
-          runRecoveryAction(toggle, key, () => enableRemoteRecovery(pluginId), {
-            successMessage: () => t("agent.remote_enabled_success", { name: pluginDisplayName(pluginId) }),
-          });
+          updateLocalRemoteEnabled(toggle);
         });
       });
     }

@@ -345,7 +345,7 @@ func recoverLocatedAgent(parent context.Context, configPath, id, mode string, ca
 	}
 	if specErr == nil {
 		if spec.Kind == pluginpkg.LaunchKindDesktopApp {
-			appSpec, ok := dashboardDesktopAppSpecByID(spec.App)
+			appSpec, ok := dashboardManifestDesktopApp(installed.Manifest, spec.App)
 			if !ok {
 				result.Error = "Unknown desktop app"
 				return
@@ -484,7 +484,7 @@ func prepareLegacyDesktopLocations(ctx context.Context, cfg *bridgeconfig.Config
 		if request.AppPath == nil {
 			continue
 		}
-		spec, ok := dashboardDesktopAppSpecByID(appID)
+		spec, ok := configuredDesktopApp(cfg, appID)
 		if ok && locationOperation(spec.PluginID).State == "connecting" {
 			return nil, fmt.Errorf("Agent recovery already in progress")
 		}

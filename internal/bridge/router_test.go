@@ -606,6 +606,14 @@ func TestRouterWaitStopsAfterTerminalCompletionEvent(t *testing.T) {
 	}
 	session := pluginruntime.NativeSession{PluginID: "codex"}
 
+	unrelated := pluginruntime.PluginEvent{
+		ID: "foreign-event", Type: "run.completed", Status: StageCompleted,
+		Payload: map[string]any{"native_run_id": "other-run"},
+	}
+	if router.handleNativeEvent("", "request-1", "conv-qa", "codex", "task-1", "plugin-desktop", session, "run-1", unrelated) {
+		t.Fatal("an explicitly identified event from a different run must not stop waiting")
+	}
+
 	terminal := pluginruntime.PluginEvent{
 		ID: "codex-task:thread-qa:turn-1:completed", Type: "run.completed", Status: StageCompleted,
 	}
@@ -2225,6 +2233,77 @@ func TestRouterRejectsPluginWithoutRemoteConversationContract(t *testing.T) {
 	}
 }
 
+func TestRouterContinuesExistingOnlyPluginAndClosesSubscription(t *testing.T) {
+	db := openConversationIndexTestDB(t)
+	bindExistingConversation(t, db, "dot", "conv-dot")
+	adapter := &existingOnlyAdapter{
+		recordingAdapter: &recordingAdapter{id: "dot", visible: true},
+		subscribed:       make(chan context.Context, 1),
+		waitResult:       make(chan pluginruntime.PluginEvent, 1),
+	}
+	sink := &recordingSink{}
+	router := &Router{
+		Service: pluginruntime.New(adapter),
+		DB:      db,
+		Config:  remoteAuthorizedConfig("dot"),
+		Sink:    sink,
+		Runs:    NewRunTracker(),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sent, err := router.HandleInbound(ctx, prismtransport.Inbound{
+		MessageID:   "continue-dot",
+		MessageType: prismtransport.MsgChatSend,
+		Payload:     &prismtransport.InboundPayload{PluginID: "dot", ConversationID: "conv-dot", Text: "Continue the existing chat"},
+	})
+	if err != nil || !sent.Visible || adapter.attachCount() != 1 {
+		t.Fatalf("expected visible continuation, got %+v (%v)", sent, err)
+	}
+
+	var subscription context.Context
+	select {
+	case subscription = <-adapter.subscribed:
+	case <-time.After(time.Second):
+		t.Fatal("send did not start the native subscription")
+	}
+	cancel()
+	if subscription.Err() != nil {
+		t.Fatal("native subscription ended with the incoming request")
+	}
+	adapter.waitResult <- pluginruntime.PluginEvent{
+		ID: "dot-interrupted", Type: "run.interrupted", Status: "cancelled", Summary: "Canceled in Dot",
+	}
+	select {
+	case <-subscription.Done():
+	case <-time.After(time.Second):
+		t.Fatal("native subscription did not close after terminal outcome")
+	}
+	if stages := sink.eventStatuses(); !containsString(stages, StageInterrupted) || containsString(stages, StageCompleted) || containsString(stages, StageFailed) {
+		t.Fatalf("expected interrupted terminal status, got %v", stages)
+	}
+	if event := findConversationEvent(sink.conversationEvents(), "run.interrupted"); event == nil || event.Status != StageInterrupted {
+		t.Fatalf("expected canonical interrupted conversation event, got %+v", event)
+	}
+	if finals := sink.finalContents(); len(finals) != 1 || finals[0] != "Canceled in Dot" {
+		t.Fatalf("expected one terminal response, got %v", finals)
+	}
+	if _, err := router.HandleConversationStart(context.Background(), prismtransport.Inbound{
+		Payload: &prismtransport.InboundPayload{PluginID: "dot", ClientMessageID: "new-dot", Text: "create"},
+	}); err == nil || !strings.Contains(err.Error(), "startSessionWithMessage unavailable") {
+		t.Fatalf("expected unsupported start, got %v", err)
+	}
+	if _, err := router.HandleConversationDraftOpen(context.Background(), prismtransport.Inbound{
+		Payload: &prismtransport.InboundPayload{PluginID: "dot"},
+	}); err == nil || !strings.Contains(err.Error(), "openDraft unavailable") {
+		t.Fatalf("expected unsupported draft, got %v", err)
+	}
+	if _, err := router.HandleInterrupt(context.Background(), prismtransport.Inbound{
+		Payload: &prismtransport.InboundPayload{PluginID: "dot", ConversationID: "conv-dot"},
+	}); err == nil || !strings.Contains(err.Error(), "interrupt unavailable") {
+		t.Fatalf("expected unsupported interrupt, got %v", err)
+	}
+}
+
 func TestRouterRejectsUnboundConversation(t *testing.T) {
 	db, err := bridgedb.Open(filepath.Join(t.TempDir(), "prism.sqlite"))
 	if err != nil {
@@ -2431,6 +2510,34 @@ type recordingAdapter struct {
 	subscribeEvents  []pluginruntime.PluginEvent
 }
 
+type existingOnlyAdapter struct {
+	*recordingAdapter
+	subscribed chan context.Context
+	waitResult chan pluginruntime.PluginEvent
+}
+
+func (a *existingOnlyAdapter) Probe(ctx context.Context) (pluginruntime.Capability, error) {
+	capability, err := a.recordingAdapter.Probe(ctx)
+	capability.CanStartSessionWithMessage = false
+	capability.CanOpenDraft = false
+	capability.CanInterrupt = false
+	return capability, err
+}
+
+func (a *existingOnlyAdapter) Subscribe(ctx context.Context, _ pluginruntime.NativeSession) (<-chan pluginruntime.PluginEvent, error) {
+	a.subscribed <- ctx
+	return make(chan pluginruntime.PluginEvent), nil
+}
+
+func (a *existingOnlyAdapter) WaitForRun(ctx context.Context, _ pluginruntime.NativeSession, _ string) (pluginruntime.PluginEvent, error) {
+	select {
+	case event := <-a.waitResult:
+		return event, nil
+	case <-ctx.Done():
+		return pluginruntime.PluginEvent{}, ctx.Err()
+	}
+}
+
 type approvalDetailAdapter struct {
 	*recordingAdapter
 	detail map[string]any
@@ -2465,6 +2572,7 @@ func (a *recordingAdapter) Probe(context.Context) (pluginruntime.Capability, err
 		CanOpenDraft:               a.visible,
 		CanListSessions:            a.visible,
 		CanReadHistory:             a.visible,
+		CanInterrupt:               a.visible,
 		CanApproval:                a.canApproval,
 		CanForwardSync:             a.visible,
 		CanWaitRun:                 true, // recordingAdapter implements RunWaiter
@@ -3003,4 +3111,13 @@ func mapReason(visible bool) string {
 		return ""
 	}
 	return "native_visible_input_false"
+}
+
+func TestRouterRejectsRemoteSharedWindowBinding(t *testing.T) {
+	const id = "another-agent"
+	router := &Router{Service: pluginruntime.New(&recordingAdapter{id: id, visible: true}), Config: remoteAuthorizedConfig(id)}
+	_, err := router.HandleSessionControl(context.Background(), prismtransport.Inbound{Payload: &prismtransport.InboundPayload{PluginID: id, Action: pluginruntime.SharedWindowBindAction}})
+	if err == nil || !strings.Contains(err.Error(), "local managed launch") {
+		t.Fatalf("unexpected remote bind result: %v", err)
+	}
 }

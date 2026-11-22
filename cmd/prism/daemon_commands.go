@@ -418,12 +418,13 @@ func runBridgeRuntime(parent context.Context, cfg *bridgeconfig.Config, db *pris
 	fmt.Fprintf(stdout, "prism runtime running: config=%s db=%s realtime=%s\n",
 		configPath, dbPath, realtimeURL)
 	queryService := &bridge.QueryService{
-		DB:              db,
-		History:         &bridge.HistoryService{DB: db},
-		Service:         router.Service,
-		ConfigProvider:  router.ConfigProvider,
-		DetailSnapshots: detailSnapshots,
-		Logger:          logger,
+		SnapshotPublisher: snapshotPublisher,
+		DB:                db,
+		History:           &bridge.HistoryService{DB: db},
+		Service:           router.Service,
+		ConfigProvider:    router.ConfigProvider,
+		DetailSnapshots:   detailSnapshots,
+		Logger:            logger,
 	}
 	for {
 		select {
@@ -613,7 +614,7 @@ func handleDesktopLaunch(ctx context.Context, client *prismtransport.Client, con
 				response.Code = "desktop_launch_failed"
 				response.Message = specErr.Error()
 			} else if spec.Kind == pluginpkg.LaunchKindDesktopApp {
-				appSpec, ok := dashboardDesktopAppSpecByID(spec.App)
+				appSpec, ok := dashboardManifestDesktopApp(*manifest, spec.App)
 				if !ok {
 					response.Code = "desktop_launch_failed"
 					response.Message = fmt.Sprintf("hub has no desktop app spec for %q (declared by plugin %s)", spec.App, manifest.ID)
@@ -1199,6 +1200,11 @@ func handleConversationHistoryStream(_ context.Context, client *prismtransport.C
 		cancel()
 		return err
 	}
+	if service.SnapshotPublisher != nil {
+		if err := service.SnapshotPublisher.ReplayForegroundDetail(stream.PluginID, stream.ConversationID); err != nil && service.Logger != nil {
+			service.Logger.Warn("replay foreground detail", "plugin_id", stream.PluginID, "err", err)
+		}
+	}
 	go relayConversationHistoryStream(streamCtx, cancel, client, requestID, bodyStreamID, pageID, stream, relay)
 	return nil
 }
@@ -1584,7 +1590,7 @@ func newBridgeServiceFromConfig(cfg *bridgeconfig.Config) *pluginruntime.Service
 	if cfg != nil {
 		if discovered, err := pluginpkg.ScanDirs(pluginDirs(cfg)); err == nil {
 			for _, item := range discovered {
-				if !bridgePluginAllowed(cfg, item.Manifest.ID) {
+				if !bridgePluginAllowed(cfg, item.Manifest.ID) || !allowsSharedDesktopCompanion(item, pluginDirs(cfg)) {
 					continue
 				}
 				adapters = append(adapters, pluginpkg.NewProcessAdapterWithEnv(item, bridgePluginEnv(cfg, item)))
@@ -1630,7 +1636,7 @@ func newPluginReloader(cfg *bridgeconfig.Config, configPath string, svc *pluginr
 		Logger:   logger,
 		Include: func(item pluginpkg.Discovered) bool {
 			current := configProvider()
-			return bridgePluginAllowed(current, item.Manifest.ID)
+			return bridgePluginAllowed(current, item.Manifest.ID) && allowsSharedDesktopCompanion(item, pluginDirs(current))
 		},
 		NewAdapter: func(item pluginpkg.Discovered) pluginruntime.PluginAdapter {
 			return pluginpkg.NewProcessAdapterWithEnv(item, bridgePluginEnv(configProvider(), item))

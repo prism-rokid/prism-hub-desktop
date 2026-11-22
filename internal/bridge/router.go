@@ -548,8 +548,7 @@ func (r *Router) HandleConversationDraftStart(ctx context.Context, in prismtrans
 				NativeRunID: started.Receipt.NativeMessageID, StartedAt: time.Now().UTC(),
 			})
 		}
-		events, _ := adapter.Subscribe(context.WithoutCancel(ctx), result.Session)
-		go r.waitForNativeRun(context.WithoutCancel(ctx), waiter, events, stored.ID, requestID, result.ConversationID, record.PluginID, taskID, inboundSourceDevice(in), result.Session, started.Receipt.NativeMessageID)
+		go r.waitForNativeRun(ctx, adapter, waiter, stored.ID, requestID, result.ConversationID, record.PluginID, taskID, inboundSourceDevice(in), result.Session, started.Receipt.NativeMessageID)
 	}
 	return result, nil
 }
@@ -673,7 +672,7 @@ func (r *Router) HandleInbound(ctx context.Context, in prismtransport.Inbound) (
 		}
 		return result, r.fail(ctx, result, in, sourceDevice, fmt.Errorf("%s unavailable: %s", result.PluginID, reason))
 	}
-	if supported, reason := remoteConversationSupportFromCapability(capability); !supported {
+	if supported, reason := pluginruntime.RemoteContinuationSupport(capability); !supported {
 		return result, r.fail(ctx, result, in, sourceDevice, fmt.Errorf("%s unavailable: remote conversation unsupported (%s)", result.PluginID, reason))
 	}
 	if err := r.validateForwardSend(result.PluginID, conversationID); err != nil {
@@ -845,8 +844,7 @@ func (r *Router) HandleInbound(ctx context.Context, in prismtransport.Inbound) (
 		// than triggering an "adapter does not implement waitForRun" error.
 		waiter, waiterOK := adapter.(pluginruntime.RunWaiter)
 		if capability.CanWaitRun && waiterOK && strings.TrimSpace(receipt.NativeMessageID) != "" {
-			events, _ := adapter.Subscribe(context.WithoutCancel(ctx), session)
-			go r.waitForNativeRun(context.WithoutCancel(ctx), waiter, events, sessionRecord.ID, in.MessageID, conversationID, result.PluginID, taskID, sourceDevice, session, receipt.NativeMessageID)
+			go r.waitForNativeRun(ctx, adapter, waiter, sessionRecord.ID, in.MessageID, conversationID, result.PluginID, taskID, sourceDevice, session, receipt.NativeMessageID)
 		} else {
 			r.emitChatFinal(in.MessageID, conversationID, StageVisible, "消息已发送到 "+result.PluginID+" 的原生会话，桌面端会显示完整执行过程。")
 		}
@@ -1351,6 +1349,14 @@ func (r *Router) HandleInterrupt(ctx context.Context, in prismtransport.Inbound)
 	if adapter == nil {
 		return result, fmt.Errorf("plugin adapter not found: %s", result.PluginID)
 	}
+	capability, err := adapter.Probe(ctx)
+	if err != nil {
+		return result, fmt.Errorf("probe %s: %w", result.PluginID, err)
+	}
+	if !capability.Available || !capability.CanInterrupt {
+		reason := firstNonEmpty(strings.TrimSpace(capability.UnavailableReason), "interrupt unavailable")
+		return result, fmt.Errorf("%s unavailable: %s", result.PluginID, reason)
+	}
 	session := pluginruntime.NativeSession{
 		PluginID:        result.PluginID,
 		NativeSessionID: sessionRecord.NativeSessionID,
@@ -1545,6 +1551,9 @@ func (r *Router) HandleSessionControl(ctx context.Context, in prismtransport.Inb
 		return result, fmt.Errorf("%s remote access disabled", result.PluginID)
 	}
 	action := inboundControlAction(in)
+	if strings.EqualFold(action, pluginruntime.SharedWindowBindAction) {
+		return result, fmt.Errorf("shared window binding requires a local managed launch")
+	}
 	if action == "" {
 		return result, fmt.Errorf("session control action required")
 	}
@@ -1748,9 +1757,10 @@ func canonicalSessionFromReceipt(session pluginruntime.NativeSession, receipt pl
 	return session
 }
 
-func (r *Router) waitForNativeRun(ctx context.Context, waiter pluginruntime.RunWaiter, events <-chan pluginruntime.PluginEvent, sessionID, requestID, conversationID, pluginID, taskID, sourceDevice string, session pluginruntime.NativeSession, runID string) {
-	waitCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+func (r *Router) waitForNativeRun(ctx context.Context, adapter pluginruntime.PluginAdapter, waiter pluginruntime.RunWaiter, sessionID, requestID, conversationID, pluginID, taskID, sourceDevice string, session pluginruntime.NativeSession, runID string) {
+	waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Minute)
 	defer cancel()
+	events, _ := adapter.Subscribe(waitCtx, session)
 	waitDone := make(chan struct {
 		event pluginruntime.PluginEvent
 		err   error
@@ -1762,28 +1772,28 @@ func (r *Router) waitForNativeRun(ctx context.Context, waiter pluginruntime.RunW
 			err   error
 		}{event: event, err: err}
 	}()
-	if events != nil {
-		for {
-			select {
-			case event, ok := <-events:
-				if !ok {
-					events = nil
-					continue
-				}
-				if r.handleNativeEvent(sessionID, requestID, conversationID, pluginID, taskID, sourceDevice, session, runID, event) {
-					return
-				}
-			case result := <-waitDone:
-				r.handleWaitResult(result.event, result.err, sessionID, requestID, conversationID, pluginID, taskID, sourceDevice, session, runID)
-				return
-			case <-waitCtx.Done():
-				r.handleWaitResult(pluginruntime.PluginEvent{}, waitCtx.Err(), sessionID, requestID, conversationID, pluginID, taskID, sourceDevice, session, runID)
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
+			if r.handleNativeEvent(sessionID, requestID, conversationID, pluginID, taskID, sourceDevice, session, runID, event) {
 				return
 			}
+		case result := <-waitDone:
+			if result.err == nil && eventIsForDifferentNativeRun(result.event, runID) {
+				waitDone = nil
+				continue
+			}
+			r.handleWaitResult(result.event, result.err, sessionID, requestID, conversationID, pluginID, taskID, sourceDevice, session, runID)
+			return
+		case <-waitCtx.Done():
+			r.handleWaitResult(pluginruntime.PluginEvent{}, waitCtx.Err(), sessionID, requestID, conversationID, pluginID, taskID, sourceDevice, session, runID)
+			return
 		}
 	}
-	result := <-waitDone
-	r.handleWaitResult(result.event, result.err, sessionID, requestID, conversationID, pluginID, taskID, sourceDevice, session, runID)
 }
 
 func (r *Router) handleNativeEvent(sessionID, requestID, conversationID, pluginID, taskID, sourceDevice string, session pluginruntime.NativeSession, runID string, event pluginruntime.PluginEvent) bool {
@@ -1791,9 +1801,17 @@ func (r *Router) handleNativeEvent(sessionID, requestID, conversationID, pluginI
 		r.emitForegroundWatcherUnavailable(pluginID, conversationID, code)
 		return false
 	}
-	status := strings.ToLower(strings.TrimSpace(event.Status))
-	if status == "" {
-		status = StageRunning
+	// A plugin may observe multiple runs in the same session. Where it reports
+	// the receipt's native run ID explicitly, only handle that run here.
+	if eventIsForDifferentNativeRun(event, runID) {
+		return false
+	}
+	status := nativeRunEventStatus(event, StageRunning)
+	eventType := strings.ToLower(strings.TrimSpace(event.Type))
+	if !strings.HasPrefix(eventType, "desktop.") && eventType != "subscription.error" &&
+		(status == StageFailed || status == StageInterrupted || (status == StageCompleted && isTerminalCompletionEvent(eventType))) {
+		r.handleWaitResult(event, nil, sessionID, requestID, conversationID, pluginID, taskID, sourceDevice, session, runID)
+		return true
 	}
 	summary := strings.TrimSpace(event.Summary)
 	if summary == "" {
@@ -1820,11 +1838,6 @@ func (r *Router) handleNativeEvent(sessionID, requestID, conversationID, pluginI
 	switch status {
 	case StageCompleted:
 		r.emitTaskEvent(pluginID, requestID, conversationID, taskID, StageCompleted, summary, sourceDevice)
-		return isTerminalCompletionEvent(event.Type)
-	case StageFailed:
-		r.emitTaskEvent(pluginID, requestID, conversationID, taskID, StageFailed, summary, sourceDevice)
-		r.emitChatError(requestID, conversationID, summary)
-		return true
 	default:
 		r.emitTaskEvent(pluginID, requestID, conversationID, taskID, StageRunning, summary, sourceDevice)
 	}
@@ -1834,6 +1847,22 @@ func (r *Router) handleNativeEvent(sessionID, requestID, conversationID, pluginI
 func isTerminalCompletionEvent(eventType string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(eventType))
 	return !strings.HasPrefix(normalized, "desktop.") && strings.HasSuffix(normalized, ".completed")
+}
+
+func nativeRunEventStatus(event pluginruntime.PluginEvent, fallback string) string {
+	status := strings.ToLower(strings.TrimSpace(event.Status))
+	switch status {
+	case "aborted", "canceled", "cancelled":
+		return StageInterrupted
+	case "":
+		switch strings.ToLower(strings.TrimSpace(event.Type)) {
+		case "run.interrupted", "run.aborted", "run.canceled", "run.cancelled":
+			return StageInterrupted
+		}
+		return fallback
+	default:
+		return status
+	}
 }
 
 func (r *Router) handleWaitResult(event pluginruntime.PluginEvent, err error, sessionID, requestID, conversationID, pluginID, taskID, sourceDevice string, session pluginruntime.NativeSession, runID string) {
@@ -1870,7 +1899,7 @@ func (r *Router) handleWaitResult(event pluginruntime.PluginEvent, err error, se
 			})
 			r.emitChatFinal(requestID, conversationID, StageRunning, summary)
 			if r.Runs != nil {
-				r.Runs.Release(requestID)
+				r.Runs.Release(pluginID, requestID)
 			}
 			return
 		}
@@ -1899,14 +1928,12 @@ func (r *Router) handleWaitResult(event pluginruntime.PluginEvent, err error, se
 		})
 		r.emitChatError(requestID, conversationID, err.Error())
 		if r.Runs != nil {
-			r.Runs.MarkTerminal(requestID)
+			r.Runs.MarkTerminal(pluginID, requestID)
 		}
 		return
 	}
-	status := strings.ToLower(strings.TrimSpace(event.Status))
-	if status == "" {
-		status = StageCompleted
-	}
+	status := nativeRunEventStatus(event, StageCompleted)
+	event.Status = status
 	summary := strings.TrimSpace(event.Summary)
 	if summary == "" {
 		summary = "原生应用已结束。"
@@ -1933,7 +1960,7 @@ func (r *Router) handleWaitResult(event pluginruntime.PluginEvent, err error, se
 		})
 		r.emitChatFinal(requestID, conversationID, StageRunning, summary)
 		if r.Runs != nil {
-			r.Runs.Release(requestID)
+			r.Runs.Release(pluginID, requestID)
 		}
 		return
 	}
@@ -1951,11 +1978,15 @@ func (r *Router) handleWaitResult(event pluginruntime.PluginEvent, err error, se
 		}, event)
 		r.emitChatError(requestID, conversationID, summary)
 		if r.Runs != nil {
-			r.Runs.MarkTerminal(requestID)
+			r.Runs.MarkTerminal(pluginID, requestID)
 		}
 		return
 	}
-	r.emitTaskEvent(pluginID, requestID, conversationID, taskID, StageCompleted, summary, sourceDevice)
+	finalStatus := StageCompleted
+	if status == StageInterrupted {
+		finalStatus = StageInterrupted
+	}
+	r.emitTaskEvent(pluginID, requestID, conversationID, taskID, finalStatus, summary, sourceDevice)
 	r.emitConversationEvent(conversationEventContext{
 		RequestID:      requestID,
 		ConversationID: conversationID,
@@ -1965,9 +1996,9 @@ func (r *Router) handleWaitResult(event pluginruntime.PluginEvent, err error, se
 		Bound:          true,
 		Session:        session,
 	}, event)
-	r.emitChatFinal(requestID, conversationID, StageCompleted, summary)
+	r.emitChatFinal(requestID, conversationID, finalStatus, summary)
 	if r.Runs != nil {
-		r.Runs.MarkTerminal(requestID)
+		r.Runs.MarkTerminal(pluginID, requestID)
 	}
 }
 

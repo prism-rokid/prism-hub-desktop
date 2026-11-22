@@ -108,7 +108,6 @@ agent.update,更新,Update,更新
 agent.updating,更新中,Updating,更新中
 agent.requires_hub_update,需要升级 Hub,Hub update required,Hub の更新が必要
 agent.unsupported_platform,不支持当前平台,Unsupported on this platform,このプラットフォームは非対応
-agent.remote_enabled_success,{name} 已开启远程。,Remote enabled for {name}.,{name} のリモートを有効化しました。
 agent.rename,编辑 Agent 信息,Edit Agent information,Agent 情報を編集
 agent.runtime_mode,运行模式,Runtime mode,実行モード
 agent.edit_description,说明,Description,説明

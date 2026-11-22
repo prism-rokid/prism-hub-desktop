@@ -24,13 +24,14 @@ func publicHistoryText(value string) string {
 }
 
 type QueryService struct {
-	DB              *bridgedb.DB
-	History         *HistoryService
-	Service         *pluginruntime.Service
-	Config          *bridgeconfig.Config
-	ConfigProvider  func() *bridgeconfig.Config
-	DetailSnapshots *DetailSnapshotStore
-	Logger          *slog.Logger
+	SnapshotPublisher *SnapshotPublisher
+	DB                *bridgedb.DB
+	History           *HistoryService
+	Service           *pluginruntime.Service
+	Config            *bridgeconfig.Config
+	ConfigProvider    func() *bridgeconfig.Config
+	DetailSnapshots   *DetailSnapshotStore
+	Logger            *slog.Logger
 }
 
 func (s *QueryService) Execute(ctx context.Context, payload *prismtransport.InboundPayload) (map[string]any, error) {
@@ -120,6 +121,11 @@ func (s *QueryService) selectConversation(ctx context.Context, payload *prismtra
 	}
 	if !control.OK {
 		return nil, fmt.Errorf("native session selection was not accepted")
+	}
+	if s.SnapshotPublisher != nil && control.DetailsConfirmed {
+		if err := s.SnapshotPublisher.publishLiveDetail(ctx, conversation.ConversationID, conversation.PluginID, conversation.Session, conversation.Session.Cwd, control.Details, true); err != nil && s.Logger != nil {
+			s.Logger.Warn("publish selected conversation detail", "plugin_id", conversation.PluginID, "err", err)
+		}
 	}
 	return map[string]any{
 		"conversation_id":  conversation.ConversationID,

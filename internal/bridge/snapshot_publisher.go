@@ -433,10 +433,27 @@ func (p *SnapshotPublisher) PublishForegroundDetails(force bool) error {
 	return nil
 }
 
+// ReplayForegroundDetail delivers the verified foreground snapshot to a
+// conversation body subscriber that attached after the select response.
+func (p *SnapshotPublisher) ReplayForegroundDetail(pluginID, conversationID string) error {
+	if p == nil || p.DetailSnapshots == nil || !pluginruntime.RemoteEnabled(p.CurrentConfig(), pluginID) {
+		return nil
+	}
+	snapshot, ok := p.DetailSnapshots.GetForRuntime(pluginID, conversationID)
+	if !ok || !firstNonEmptyBool(snapshot["desktop_foreground"]) || firstNonEmptyBool(snapshot["detail_stale"]) {
+		return nil
+	}
+	return p.publishDetail(snapshot, true)
+}
+
 // PublishLiveDetail materializes and publishes one foreground watcher result.
 // A watcher transition is also responsible for making the previously foreground
 // conversation explicitly stale before the new one becomes visible remotely.
 func (p *SnapshotPublisher) PublishLiveDetail(ctx context.Context, conversationID, pluginID string, session pluginruntime.NativeSession, cwd string, details map[string]any) error {
+	return p.publishLiveDetail(ctx, conversationID, pluginID, session, cwd, details, false)
+}
+
+func (p *SnapshotPublisher) publishLiveDetail(ctx context.Context, conversationID, pluginID string, session pluginruntime.NativeSession, cwd string, details map[string]any, force bool) error {
 	if p == nil || len(details) == 0 {
 		return nil
 	}
@@ -476,7 +493,7 @@ func (p *SnapshotPublisher) PublishLiveDetail(ctx context.Context, conversationI
 	if previousForeground != conversationID && firstNonEmptyBool(payload["desktop_foreground"]) {
 		p.acknowledgeDesktopRead(pluginID, conversationID)
 	}
-	return p.publishDetail(payload, false)
+	return p.publishDetail(payload, force)
 }
 
 func (p *SnapshotPublisher) acknowledgeDesktopRead(pluginID, conversationID string) {

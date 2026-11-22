@@ -51,6 +51,7 @@ func TestBuildConversationIndexAssignsStableSignature(t *testing.T) {
 					"approval_mode":       "on-request",
 					"context_tokens_used": "100",
 					"session_kind":        "direct",
+					"can_send":            "false",
 					"origin_provider":     "wechat",
 					"agent_id":            "must-not-leak",
 				},
@@ -73,7 +74,7 @@ func TestBuildConversationIndexAssignsStableSignature(t *testing.T) {
 		t.Fatalf("expected stable plugin signature, got %q vs %q", first[0].Signature, second[0].Signature)
 	}
 	metadata := first[0].Conversations[0].Metadata
-	if metadata["session_kind"] != "direct" || metadata["origin_provider"] != "wechat" {
+	if metadata["session_kind"] != "direct" || metadata["origin_provider"] != "wechat" || metadata["can_send"] != "false" {
 		t.Fatalf("expected session classification metadata, got %+v", metadata)
 	}
 	if _, leaked := metadata["agent_id"]; leaked {
@@ -371,4 +372,18 @@ func openConversationIndexTestDB(t *testing.T) *bridgedb.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func TestConversationIndexUsesAgentGroupLabelWithoutChangingNativeCwd(t *testing.T) {
+	record := bridgedb.SessionRecord{PrismConversationID: "conversation", PluginID: "another-agent"}
+	hint := pluginruntime.NativeSessionHint{Metadata: map[string]string{"group_label": "Main chat"}}
+	item, ok := conversationIndexItemFromHint(hint, record)
+	if !ok || item.Cwd != "Main chat" {
+		t.Fatalf("expected the agent's group label, got %+v", item)
+	}
+	hint.Cwd = "/projects/native"
+	item, ok = conversationIndexItemFromHint(hint, record)
+	if !ok || item.Cwd != hint.Cwd {
+		t.Fatalf("expected the native directory to take precedence, got %+v", item)
+	}
 }

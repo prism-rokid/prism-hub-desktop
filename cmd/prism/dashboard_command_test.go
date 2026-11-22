@@ -535,7 +535,8 @@ func TestDashboardRecoveryActionResources(t *testing.T) {
 		`result?.message || (result ? t("agent.managed_recovered"`,
 		`action: "agent-refresh"`,
 		`data-recovery-toggle="remote-enabled"`,
-		`updateHostPlugin(pluginId, true)`,
+		`updateHostPlugin(pluginId, enabled)`,
+		`toggle.checked = Boolean(hostPluginFor(pluginId))`,
 		`recoveryMenuMarkup({`,
 		`const remoteLifecycleStep = remoteEnabled ?`,
 		`${runtimeStatus}<i class="life-arrow"`,
@@ -570,7 +571,6 @@ func TestDashboardRecoveryActionResources(t *testing.T) {
 		"drawer.check_update,",
 		"recovery.agent_interrupted,",
 		"agent.refresh,",
-		"agent.remote_enabled_success,",
 		"agent.managed_recovered,",
 	} {
 		if !strings.Contains(string(translations), key) {
@@ -1439,6 +1439,29 @@ func TestDashboardHostPluginRegistrationReportsRuntimeUnavailable(t *testing.T) 
 	_, err := dashboardHostPluginRegistrationPayloadWithService(cfg, svc, "codex")
 	if err == nil || !strings.Contains(err.Error(), "runtime unavailable") || strings.Contains(err.Error(), "missing_forward_sync") {
 		t.Fatalf("expected runtime-unavailable error, got %v", err)
+	}
+}
+
+func TestDashboardRegistersExistingOnlyPlugin(t *testing.T) {
+	cfg := bridgeconfig.Default()
+	pluginsRoot := filepath.Join(t.TempDir(), "plugins")
+	writeDashboardTestPlugin(t, pluginsRoot, "dot", "Dot")
+	cfg.Bridge.PluginDirs = []string{pluginsRoot}
+	svc := pluginruntime.New(pluginruntime.StaticPlugin{
+		PluginID: "dot",
+		Capability: pluginruntime.Capability{
+			Available: true, CanForwardSync: true, CanListSessions: true,
+			CanReadHistory: true, CanWaitRun: true, CanAttachSession: true,
+		},
+	})
+	payload, err := dashboardHostPluginRegistrationPayloadWithService(cfg, svc, "dot")
+	if err != nil || payload["plugin_id"] != "dot" {
+		t.Fatalf("expected Dot registration payload, got %v (%v)", payload, err)
+	}
+	capabilities, _ := payload["capabilities"].(map[string]any)
+	if capabilities["can_start_session_with_message"] != false || capabilities["can_open_draft"] != false ||
+		capabilities["can_attach_session"] != true {
+		t.Fatalf("unexpected capabilities: %v", capabilities)
 	}
 }
 

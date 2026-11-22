@@ -98,7 +98,7 @@ func TestBuildCatalogPluginsTiers(t *testing.T) {
 		},
 		&catalogProbeAdapter{
 			id: "hermes", available: true, visible: true, surface: "tui", reverse: true,
-			list: true, history: true, forward: true, waitRun: true, attach: true, start: true,
+			list: true, history: true, forward: true, waitRun: true, attach: true,
 			meta: pluginruntime.LocalMetadata{DisplayName: "Hermes", PluginID: "hermes"},
 		},
 		&catalogProbeAdapter{id: "opencode", available: false, visible: true, surface: "tui_server", reason: "server_offline"},
@@ -150,8 +150,8 @@ func TestBuildCatalogPluginsTiers(t *testing.T) {
 	if !hermes.CanReverseSync || !hermes.ReverseSyncEnabled {
 		t.Fatalf("hermes should support reverse sync and report enabled, got %+v", hermes)
 	}
-	if !hermes.RemoteSupported || !hermes.VisibleInRemote {
-		t.Fatalf("hermes should still be remote supported and visible, got %+v", hermes)
+	if !hermes.RemoteSupported || !hermes.VisibleInRemote || hermes.CanStartSessionWithMessage || hermes.CanOpenDraft {
+		t.Fatalf("existing-only plugin should be visible with creation capabilities disabled, got %+v", hermes)
 	}
 
 	opencode := byID["opencode"]
@@ -244,39 +244,6 @@ func TestDisplayFromID(t *testing.T) {
 	for in, want := range cases {
 		if got := displayFromID(in); got != want {
 			t.Errorf("displayFromID(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestRemoteConversationSupport(t *testing.T) {
-	cases := []struct {
-		name   string
-		item   transport.CatalogPlugin
-		want   bool
-		reason string
-	}{
-		{
-			name: "supported",
-			item: transport.CatalogPlugin{Installed: true, CanForwardSync: true, CanListSessions: true, CanReadHistory: true, CanWaitRun: true, CanAttachSession: true, CanStartSessionWithMessage: true},
-			want: true,
-		},
-		{
-			name:   "missing history",
-			item:   transport.CatalogPlugin{Installed: true, CanForwardSync: true, CanListSessions: true, CanWaitRun: true, CanAttachSession: true, CanStartSessionWithMessage: true},
-			want:   false,
-			reason: "missing_read_history",
-		},
-		{
-			name:   "missing session entry",
-			item:   transport.CatalogPlugin{Installed: true, CanForwardSync: true, CanListSessions: true, CanReadHistory: true, CanWaitRun: true, CanStartSessionWithMessage: true},
-			want:   false,
-			reason: "missing_attach_session",
-		},
-	}
-	for _, tc := range cases {
-		got, reason := remoteConversationSupport(tc.item)
-		if got != tc.want || reason != tc.reason {
-			t.Fatalf("%s: got (%v,%q), want (%v,%q)", tc.name, got, reason, tc.want, tc.reason)
 		}
 	}
 }

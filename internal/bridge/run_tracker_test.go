@@ -123,7 +123,7 @@ func TestRunTrackerSuppressesOnlyMatchingRunAfterTerminal(t *testing.T) {
 		NativeThreadID:  "live-4",
 		NativeRunID:     "run-forward-4",
 	})
-	tracker.MarkTerminal("req-4")
+	tracker.MarkTerminal("hermes", "req-4")
 	if !tracker.ShouldSuppress("hermes", "conv-4", pluginruntime.NativeSession{
 		NativeSessionID: "stored-4",
 		NativeThreadID:  "live-4",
@@ -158,7 +158,7 @@ func TestRunTrackerReleaseAndExpiry(t *testing.T) {
 		PluginID:    "openclaw",
 		NativeRunID: "run-4",
 	})
-	tracker.Release("req-4")
+	tracker.Release("openclaw", "req-4")
 	if tracker.ShouldSuppress("openclaw", "", pluginruntime.NativeSession{}, pluginruntime.PluginEvent{ID: "run-4"}) {
 		t.Fatal("expected released run to stop suppressing")
 	}
@@ -170,5 +170,37 @@ func TestRunTrackerReleaseAndExpiry(t *testing.T) {
 	tracker.now = func() time.Time { return base.Add(2 * time.Second) }
 	if tracker.ShouldSuppress("openclaw", "", pluginruntime.NativeSession{}, pluginruntime.PluginEvent{ID: "run-5"}) {
 		t.Fatal("expected expired run to stop suppressing")
+	}
+}
+
+func TestRunTrackerScopesRequestsByPlugin(t *testing.T) {
+	tracker := NewRunTracker()
+	for _, pluginID := range []string{"codex", "dot"} {
+		tracker.Track(ForwardRun{
+			RequestID: "same-request", ConversationID: "same-conversation",
+			PluginID: pluginID, NativeRunID: "same-native-run",
+		})
+	}
+	update := pluginruntime.PluginEvent{ID: "unknown-native-run", Type: "message.delta"}
+	for _, pluginID := range []string{"codex", "dot"} {
+		if !tracker.ShouldSuppress(pluginID, "same-conversation", pluginruntime.NativeSession{}, update) {
+			t.Fatalf("expected both independent runs to remain active, missing %s", pluginID)
+		}
+	}
+	update.Payload = map[string]any{"native_run_id": "another-run"}
+	if tracker.ShouldSuppress("dot", "same-conversation", pluginruntime.NativeSession{}, update) {
+		t.Fatal("a distinctly identified native run must still reach reverse sync")
+	}
+	update.Payload = nil
+	tracker.MarkTerminal(" DOT ", "same-request")
+	if tracker.ShouldSuppress("dot", "same-conversation", pluginruntime.NativeSession{}, update) ||
+		!tracker.ShouldSuppress("codex", "same-conversation", pluginruntime.NativeSession{}, update) {
+		t.Fatal("terminating Dot's request must leave Codex's request active")
+	}
+	terminal := pluginruntime.PluginEvent{ID: "same-native-run", Type: "run.completed"}
+	tracker.Release("codex", "same-request")
+	if tracker.ShouldSuppress("codex", "same-conversation", pluginruntime.NativeSession{}, terminal) ||
+		!tracker.ShouldSuppress("dot", "same-conversation", pluginruntime.NativeSession{}, terminal) {
+		t.Fatal("releasing Codex's request must leave Dot's terminal grace record intact")
 	}
 }
