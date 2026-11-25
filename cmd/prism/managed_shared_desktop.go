@@ -192,11 +192,15 @@ func (agent *sharedDesktopAgent) readLease(dir string) sharedDesktopLease {
 }
 
 func (agent *sharedDesktopAgent) writeLease(dir string, lease sharedDesktopLease) error {
-	data, err := json.Marshal(lease)
+	return writeDesktopHostState(dir, agent.pluginID+"-window.json", lease)
+}
+
+func writeDesktopHostState(dir, name string, value any) error {
+	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(dir, "."+agent.pluginID+"-window-*")
+	file, err := os.CreateTemp(dir, "."+name+"-*")
 	if err != nil {
 		return err
 	}
@@ -208,7 +212,7 @@ func (agent *sharedDesktopAgent) writeLease(dir string, lease sharedDesktopLease
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), filepath.Join(dir, agent.pluginID+"-window.json"))
+	return os.Rename(file.Name(), filepath.Join(dir, name))
 }
 
 func (agent *sharedDesktopAgent) appPath(cfg *bridgeconfig.Config) string {
@@ -551,7 +555,7 @@ func (agent *sharedDesktopAgent) bindWindow(ctx context.Context, cfg *bridgeconf
 			}
 			if target.ID != "" {
 				host.TargetID = target.ID
-				if attachOnly && previous.HostPID != pid {
+				if attachOnly && (previous.HostPID != pid || previous.HostStart != start) {
 					return agent.restoreBinding(ctx, dir, host, controller, peer)
 				}
 				return agent.finishBinding(ctx, dir, host, controller)

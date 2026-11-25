@@ -417,6 +417,12 @@ func runBridgeRuntime(parent context.Context, cfg *bridgeconfig.Config, db *pris
 	}()
 	fmt.Fprintf(stdout, "prism runtime running: config=%s db=%s realtime=%s\n",
 		configPath, dbPath, realtimeURL)
+	var selections *sharedDesktopSelections
+	if runtimeGOOS() == "darwin" {
+		if dir, err := desktopHostRuntimeDirectory(); err == nil {
+			selections = loadSharedDesktopSelections(dir)
+		}
+	}
 	queryService := &bridge.QueryService{
 		PrepareSelection: func(ctx context.Context, pluginID string) error {
 			return prepareSharedDesktopSelection(ctx, router.ConfigProvider(), pluginID)
@@ -506,7 +512,7 @@ func runBridgeRuntime(parent context.Context, cfg *bridgeconfig.Config, db *pris
 					} else {
 						logger.Info("bridge query received", "msg_id", in.MessageID)
 					}
-					if err := handleBridgeQuery(queryCtx, client, queryService, in); err != nil {
+					if err := handleBridgeQuery(queryCtx, client, queryService, selections, in); err != nil {
 						logger.Warn("bridge query failed", "msg_id", in.MessageID, "cost_ms", time.Since(queryStartedAt).Milliseconds(), "err", err)
 					} else if in.Payload != nil {
 						logger.Info("bridge query response sent",
@@ -1112,7 +1118,7 @@ func handleConversationMenuSession(ctx context.Context, client *prismtransport.C
 	return err
 }
 
-func handleBridgeQuery(ctx context.Context, client *prismtransport.Client, service *bridge.QueryService, in prismtransport.Inbound) error {
+func handleBridgeQuery(ctx context.Context, client *prismtransport.Client, service *bridge.QueryService, selections *sharedDesktopSelections, in prismtransport.Inbound) error {
 	if client == nil {
 		return fmt.Errorf("realtime client unavailable")
 	}
@@ -1130,6 +1136,12 @@ func handleBridgeQuery(ctx context.Context, client *prismtransport.Client, servi
 		pluginID = strings.TrimSpace(payload.PluginID)
 	}
 	if queryType == "conversation.history.stream" {
+		if selections != nil && isRestoredPanelBody(payload) && pluginruntime.RemoteEnabled(service.CurrentConfig(), pluginID) {
+			selectRequest := &prismtransport.InboundPayload{QueryType: "conversation.select", PluginID: pluginID, ConversationID: conversationID}
+			if _, err := selections.selectSession(ctx, service.CurrentConfig(), selectRequest, true, service.Execute); err != nil {
+				slog.Warn("restore selected shared desktop session", "plugin_id", pluginID, "err", err)
+			}
+		}
 		return handleConversationHistoryStream(ctx, client, service, requestID, conversationID, pluginID, payload)
 	}
 	if queryType == "conversation.history.cancel" {
@@ -1142,7 +1154,13 @@ func handleBridgeQuery(ctx context.Context, client *prismtransport.Client, servi
 		PluginID:       pluginID,
 		Success:        false,
 	}
-	result, err := service.Execute(ctx, payload)
+	var result map[string]any
+	var err error
+	if queryType == "conversation.select" && selections != nil && pluginruntime.RemoteEnabled(service.CurrentConfig(), pluginID) {
+		result, err = selections.selectSession(ctx, service.CurrentConfig(), payload, false, service.Execute)
+	} else {
+		result, err = service.Execute(ctx, payload)
+	}
 	if err != nil {
 		responsePayload.Error = err.Error()
 	} else {

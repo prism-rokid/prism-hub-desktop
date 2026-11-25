@@ -245,6 +245,65 @@ func TestQueryServiceConversationSelectUsesStandardSessionControl(t *testing.T) 
 	}
 }
 
+type confirmedSelectionAdapter struct {
+	selectingQueryAdapter
+	available bool
+}
+
+func (a *confirmedSelectionAdapter) Probe(ctx context.Context) (pluginruntime.Capability, error) {
+	capability, err := a.selectingQueryAdapter.Probe(ctx)
+	capability.Available = a.available
+	return capability, err
+}
+
+func (a *confirmedSelectionAdapter) ControlSession(context.Context, pluginruntime.SessionControlRequest) (pluginruntime.SessionControlResult, error) {
+	return pluginruntime.SessionControlResult{OK: true, DetailsConfirmed: true,
+		Details: map[string]any{"desktop_foreground": true, "detail_stale": false}}, nil
+}
+
+func TestSelectionPublishesRecoveredAvailabilityBeforeConfirmedDetail(t *testing.T) {
+	ctx := context.Background()
+	db := openConversationIndexTestDB(t)
+	bindQueryConversation(t, db)
+	agent := &confirmedSelectionAdapter{}
+	other := &pluginruntime.StaticPlugin{PluginID: "peer", Capability: pluginruntime.Capability{PluginID: "peer", Available: false}}
+	svc := pluginruntime.New(agent, other)
+	cfg, sink, store := remoteAuthorizedConfig("codex", "peer"), &recordingSink{}, NewDetailSnapshotStore()
+	pub := NewSnapshotPublisher(svc, db, cfg, nil, sink, store, nil)
+	pub.PublishAll(ctx)
+	sink.controls = nil
+	query := &QueryService{DB: db, Config: cfg, Service: svc, DetailSnapshots: store, SnapshotPublisher: pub}
+	agent.available = true
+	selectRequest := &prismtransport.InboundPayload{QueryType: "conversation.select", ConversationID: "conv-query-1", PluginID: "codex"}
+	for i := 0; i < 2; i++ {
+		if _, err := query.Execute(ctx, selectRequest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []prismtransport.MessageType{prismtransport.MsgCatalogSnapshot, prismtransport.MsgConversationIndexSnapshot,
+		prismtransport.MsgConversationDetailSnapshot, prismtransport.MsgConversationDetailSnapshot}
+	if len(sink.controls) != len(want) {
+		t.Fatalf("unexpected projection count %d", len(sink.controls))
+	}
+	for i, mt := range want {
+		if got := sink.controls[i].MessageType; got != mt {
+			t.Fatalf("projection %d: got %v, want %v", i, got, mt)
+		}
+	}
+	catalog := sink.controls[0].Payload.(prismtransport.CatalogSnapshotPayload)
+	availability := map[string]bool{}
+	for _, entry := range catalog.Plugins {
+		availability[entry.PluginID] = entry.Available
+	}
+	if len(availability) != 2 || !availability["codex"] || availability["peer"] {
+		t.Fatalf("recovery changed other agents or omitted the target: %v", availability)
+	}
+	index := sink.controls[1].Payload.(prismtransport.ConversationIndexSnapshotPayload)
+	if len(index.Plugins) != 1 || !index.Plugins[0].Available || index.Plugins[0].PluginID != "codex" || len(index.Plugins[0].Conversations) != 1 {
+		t.Fatalf("missing recovered index: %+v", index)
+	}
+}
+
 func TestQueryServiceConversationSelectSkipsUnadvertisedSessionControl(t *testing.T) {
 	db, err := bridgedb.Open(filepath.Join(t.TempDir(), "prism.sqlite"))
 	if err != nil {

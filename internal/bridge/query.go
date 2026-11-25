@@ -134,6 +134,11 @@ func (s *QueryService) selectConversation(ctx context.Context, payload *prismtra
 	if !control.OK {
 		return nil, fmt.Errorf("native session selection was not accepted")
 	}
+	if s.SnapshotPublisher != nil {
+		if err := s.SnapshotPublisher.RebuildConversationIndexIfStale(ctx, conversation.PluginID, true); err != nil {
+			return nil, fmt.Errorf("publish recovered conversation directory: %w", err)
+		}
+	}
 	if s.SnapshotPublisher != nil && control.DetailsConfirmed {
 		if err := s.SnapshotPublisher.publishLiveDetail(ctx, conversation.ConversationID, conversation.PluginID, conversation.Session, conversation.Session.Cwd, control.Details, true); err != nil && s.Logger != nil {
 			s.Logger.Warn("publish selected conversation detail", "plugin_id", conversation.PluginID, "err", err)
