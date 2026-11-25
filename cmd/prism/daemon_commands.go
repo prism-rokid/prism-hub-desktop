@@ -418,6 +418,9 @@ func runBridgeRuntime(parent context.Context, cfg *bridgeconfig.Config, db *pris
 	fmt.Fprintf(stdout, "prism runtime running: config=%s db=%s realtime=%s\n",
 		configPath, dbPath, realtimeURL)
 	queryService := &bridge.QueryService{
+		PrepareSelection: func(ctx context.Context, pluginID string) error {
+			return prepareSharedDesktopSelection(ctx, router.ConfigProvider(), pluginID)
+		},
 		SnapshotPublisher: snapshotPublisher,
 		DB:                db,
 		History:           &bridge.HistoryService{DB: db},

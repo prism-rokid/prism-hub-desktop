@@ -270,6 +270,43 @@ func TestQueryServiceConversationSelectSkipsUnadvertisedSessionControl(t *testin
 	}
 }
 
+func TestQueryServiceConversationSelectRejectsUnavailableRuntime(t *testing.T) {
+	db := openConversationIndexTestDB(t)
+	bindQueryConversation(t, db)
+	adapter := pluginruntime.StaticPlugin{PluginID: "codex", Capability: pluginruntime.Capability{
+		UnavailableReason: "managed window disconnected",
+	}}
+	service := &QueryService{Config: remoteAuthorizedConfig(), DB: db, Service: pluginruntime.New(adapter)}
+	result, err := service.Execute(context.Background(), &prismtransport.InboundPayload{
+		QueryType: "conversation.select", ConversationID: "conv-query-1", PluginID: "codex",
+	})
+	if result != nil || err == nil || !strings.Contains(err.Error(), adapter.Capability.UnavailableReason) {
+		t.Fatalf("unavailable runtime selection: result=%#v err=%v", result, err)
+	}
+}
+
+func TestQueryServicePreparesExplicitSelectionBeforeProbe(t *testing.T) {
+	db := openConversationIndexTestDB(t)
+	bindQueryConversation(t, db)
+	adapter := &pluginruntime.StaticPlugin{PluginID: "codex"}
+	service := &QueryService{
+		Config: remoteAuthorizedConfig(), DB: db, Service: pluginruntime.New(adapter),
+		PrepareSelection: func(_ context.Context, pluginID string) error {
+			if pluginID != adapter.PluginID {
+				t.Fatalf("unexpected selection target %q", pluginID)
+			}
+			adapter.Capability.Available = true
+			return nil
+		},
+	}
+	result, err := service.Execute(context.Background(), &prismtransport.InboundPayload{
+		QueryType: "conversation.select", ConversationID: "conv-query-1", PluginID: "codex",
+	})
+	if err != nil || result["selected"] != true || !adapter.Capability.Available {
+		t.Fatalf("prepared selection: result=%#v err=%v", result, err)
+	}
+}
+
 func TestQueryServiceCanonicalConversationDetailUsesListedHint(t *testing.T) {
 	db, err := bridgedb.Open(filepath.Join(t.TempDir(), "prism.sqlite"))
 	if err != nil {

@@ -398,6 +398,39 @@ func sharedDesktopLeaseTarget(ctx context.Context, lease sharedDesktopLease) des
 }
 
 func (agent *sharedDesktopAgent) ensureWindow(ctx context.Context, cfg *bridgeconfig.Config) (sharedDesktopLease, error) {
+	return agent.bindWindow(ctx, cfg, false)
+}
+
+// Explicit remote selection may restore an existing local binding. Initial
+// binding and launching the desktop application remain local Dashboard actions.
+func prepareSharedDesktopSelection(ctx context.Context, cfg *bridgeconfig.Config, pluginID string) error {
+	if runtimeGOOS() != "darwin" || filepath.Base(pluginID) != pluginID || pluginID == "" {
+		return nil
+	}
+	dir, err := desktopHostRuntimeDirectory()
+	if err != nil {
+		return err
+	}
+	agent := sharedDesktopAgent{pluginID: pluginID}
+	lease := agent.readLease(dir)
+	if !lease.SharedWindow || lease.Phase != "ready" || lease.Binding == "" {
+		return nil
+	}
+	if sharedDesktopLeaseTarget(ctx, lease).ID != "" {
+		return nil
+	}
+	item, err := dashboardPluginManifest(cfg, pluginID)
+	if err != nil || !supportsSharedDesktopHost(item) {
+		return nil
+	}
+	agent.displayName = item.Manifest.DisplayName
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	_, err = agent.bindWindow(ctx, cfg, true)
+	return err
+}
+
+func (agent *sharedDesktopAgent) bindWindow(ctx context.Context, cfg *bridgeconfig.Config, attachOnly bool) (sharedDesktopLease, error) {
 	if runtimeGOOS() != "darwin" {
 		return sharedDesktopLease{}, errors.New("managed shared ChatGPT windows require macOS")
 	}
@@ -440,10 +473,16 @@ func (agent *sharedDesktopAgent) ensureWindow(ctx context.Context, cfg *bridgeco
 		return sharedDesktopLease{}, err
 	}
 	previous := agent.readLease(dir)
+	if attachOnly && (!previous.SharedWindow || previous.Phase != "ready" || previous.Binding == "") {
+		return sharedDesktopLease{}, errors.New("shared window is no longer bound locally")
+	}
 	if previous.SharedWindow && previous.HostPID > 0 {
 		hostPath, _ := filepath.EvalSymlinks(desktopHostNativeProcessPath(previous.HostPID))
 		if hostPath == appPath {
 			if target := sharedDesktopLeaseTarget(ctx, previous); target.ID != "" {
+				if attachOnly {
+					return previous, nil
+				}
 				return agent.finishBinding(ctx, dir, previous, controller)
 			}
 		}
@@ -453,8 +492,19 @@ func (agent *sharedDesktopAgent) ensureWindow(ctx context.Context, cfg *bridgeco
 		return sharedDesktopLease{}, err
 	}
 	if pid == 0 {
+		if attachOnly {
+			return sharedDesktopLease{}, errors.New("the managed ChatGPT host is not running; open it in Prism Hub")
+		}
 		if err := startSharedChatGPTHost(cfg, appPath); err != nil {
 			return sharedDesktopLease{}, err
+		}
+	}
+	if attachOnly {
+		// A running ChatGPT can have its own debugger. Only adopt the instance
+		// using the locally configured managed profile and its launch flags.
+		args, err := exec.CommandContext(ctx, "/bin/ps", "-ww", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+		if err != nil || !sharedDesktopManagedCommand(string(args), sharedDesktopProfile(cfg)) {
+			return sharedDesktopLease{}, errors.New("ChatGPT is not using the managed profile; rehost it in Prism Hub")
 		}
 	}
 	var origin string
@@ -491,6 +541,7 @@ func (agent *sharedDesktopAgent) ensureWindow(ctx context.Context, cfg *bridgeco
 			if err != nil {
 				return sharedDesktopLease{}, err
 			}
+			peer := hint
 			if hint.TargetID == "" && previous.HostPID == pid && previous.HostStart == start {
 				hint = previous
 			}
@@ -500,6 +551,9 @@ func (agent *sharedDesktopAgent) ensureWindow(ctx context.Context, cfg *bridgeco
 			}
 			if target.ID != "" {
 				host.TargetID = target.ID
+				if attachOnly && previous.HostPID != pid {
+					return agent.restoreBinding(ctx, dir, host, controller, peer)
+				}
 				return agent.finishBinding(ctx, dir, host, controller)
 			}
 		}
@@ -508,6 +562,19 @@ func (agent *sharedDesktopAgent) ensureWindow(ctx context.Context, cfg *bridgeco
 		}
 	}
 	return sharedDesktopLease{}, errors.New("无法找到可共用的 Codex 托管页面")
+}
+
+func (agent *sharedDesktopAgent) restoreBinding(ctx context.Context, dir string, host sharedDesktopLease, controller pluginruntime.SessionController, peer sharedDesktopLease) (sharedDesktopLease, error) {
+	bound, err := agent.finishBinding(ctx, dir, host, controller)
+	if err != nil && agent.pluginID == "codex" && peer.SharedWindow && peer.Phase == "ready" && peer.Binding != "" &&
+		peer.HostPID == host.HostPID && peer.HostStart == host.HostStart && peer.CDPOrigin == host.CDPOrigin &&
+		peer.TargetID == host.TargetID && sharedDesktopLeaseTarget(ctx, peer).ID == host.TargetID {
+		// The companion can select its requested thread via a verified peer.
+		// Its read-only bind requires that thread in front. Leave its own
+		// binding untouched until it can prove it on a later selection.
+		return peer, nil
+	}
+	return bound, err
 }
 
 // A second surface can reuse a renderer already verified by a registered agent
@@ -537,6 +604,21 @@ func sharedDesktopTargetHint(dir string, agents []*sharedDesktopAgent, current *
 	return hint, nil
 }
 
+func sharedDesktopManagedCommand(command, profile string) bool {
+	command = " " + strings.TrimSpace(command) + " "
+	return profile != "" && strings.Contains(command, " --user-data-dir="+profile+" --remote-debugging-port=0 ")
+}
+
+func sharedDesktopProfile(cfg *bridgeconfig.Config) string {
+	codex, _ := dashboardDesktopAppSpecByID("codex")
+	profile := dashboardDesktopProfileDir(codex)
+	if cfg != nil {
+		profile = firstNonEmpty(firstNonEmptyMap(cfg.Bridge.Plugins["codex"].Env, codex.UserDataEnvKey),
+			firstNonEmptyMap(cfg.Bridge.PluginEnv, codex.UserDataEnvKey), profile)
+	}
+	return profile
+}
+
 func startSharedChatGPTHost(cfg *bridgeconfig.Config, appPath string) error {
 	codex, _ := dashboardDesktopAppSpecByID("codex")
 	processes, err := dashboardDesktopProcessesWithError(codex)
@@ -546,12 +628,7 @@ func startSharedChatGPTHost(cfg *bridgeconfig.Config, appPath string) error {
 	if len(processes) > 0 {
 		return errors.New("another Codex or ChatGPT process is already running")
 	}
-	profile := dashboardDesktopProfileDir(codex)
-	if cfg != nil {
-		profile = firstNonEmpty(firstNonEmptyMap(cfg.Bridge.Plugins["codex"].Env, codex.UserDataEnvKey),
-			firstNonEmptyMap(cfg.Bridge.PluginEnv, codex.UserDataEnvKey), profile)
-	}
-	command := dashboardManagedDesktopCommand(appPath, dashboardManagedDesktopLaunchArgs(profile))
+	command := dashboardManagedDesktopCommand(appPath, dashboardManagedDesktopLaunchArgs(sharedDesktopProfile(cfg)))
 	command.Dir = string(filepath.Separator)
 	if err := command.Start(); err != nil {
 		return err

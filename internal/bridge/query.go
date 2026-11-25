@@ -25,6 +25,7 @@ func publicHistoryText(value string) string {
 
 type QueryService struct {
 	SnapshotPublisher *SnapshotPublisher
+	PrepareSelection  func(context.Context, string) error
 	DB                *bridgedb.DB
 	History           *HistoryService
 	Service           *pluginruntime.Service
@@ -89,9 +90,20 @@ func (s *QueryService) selectConversation(ctx context.Context, payload *prismtra
 	if err != nil {
 		return nil, err
 	}
+	// An explicit selection may need to reconnect a previously bound desktop.
+	// Passive detail and history queries never invoke this hook.
+	if s.PrepareSelection != nil {
+		if err := s.PrepareSelection(ctx, conversation.PluginID); err != nil {
+			return nil, fmt.Errorf("prepare native session: %w", err)
+		}
+	}
 	capability, err := adapter.Probe(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("probe native session: %w", err)
+	}
+	if !capability.Available {
+		reason := firstNonEmpty(strings.TrimSpace(capability.UnavailableReason), "native session unavailable")
+		return nil, fmt.Errorf("%s unavailable: %s", conversation.PluginID, reason)
 	}
 	controller, ok := adapter.(pluginruntime.SessionController)
 	if !ok || !capability.CanControlSession {

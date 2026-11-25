@@ -15,7 +15,69 @@ import (
 	"time"
 
 	pluginpkg "rokid-prism-hub/internal/plugin"
+	"rokid-prism-hub/internal/pluginruntime"
 )
+
+func TestSharedDesktopRestoreOnlyAdoptsManagedProfile(t *testing.T) {
+	const profile = "/A path/Codex"
+	for _, tc := range []struct {
+		command string
+		want    bool
+	}{
+		{"/ChatGPT --user-data-dir=/A path/Codex --remote-debugging-port=0 --no-first-run", true},
+		{"/ChatGPT", false},
+		{"/ChatGPT --user-data-dir=/A path/Codex backup --remote-debugging-port=0", false},
+		{"/ChatGPT --user-data-dir=/A path/Codex --remote-debugging-port=9000", false},
+	} {
+		if got := sharedDesktopManagedCommand(tc.command, profile); got != tc.want {
+			t.Errorf("%q: managed = %v", tc.command, got)
+		}
+	}
+}
+
+type sharedBindController func(context.Context, pluginruntime.SessionControlRequest) (pluginruntime.SessionControlResult, error)
+
+func (f sharedBindController) ControlSession(ctx context.Context, req pluginruntime.SessionControlRequest) (pluginruntime.SessionControlResult, error) {
+	return f(ctx, req)
+}
+
+func TestSharedDesktopCompanionUsesVerifiedPeerAfterHostRestart(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS shared window contract")
+	}
+	dir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]desktopHostTarget{{ID: "replacement", Type: "page", URL: "app://-/index.html", WS: "ws://" + r.Host + "/devtools/page/replacement"}})
+	}))
+	defer server.Close()
+	ctx := context.Background()
+	codex := sharedDesktopAgent{pluginID: "codex"}
+	old := sharedDesktopLease{SharedWindow: true, HostPID: -1, Binding: "workspace", Phase: "ready", TargetID: "old"}
+	if err := codex.writeLease(dir, old); err != nil {
+		t.Fatal(err)
+	}
+	host := sharedDesktopLease{SharedWindow: true, HostPID: os.Getpid(), HostStart: desktopHostProcessStart(ctx, os.Getpid()), CDPOrigin: server.URL, TargetID: "replacement", Binding: old.Binding, Phase: "opening"}
+	peer := host
+	peer.Phase, peer.Binding = "ready", "peer-room"
+	inactive := sharedBindController(func(context.Context, pluginruntime.SessionControlRequest) (pluginruntime.SessionControlResult, error) {
+		return pluginruntime.SessionControlResult{}, errors.New("companion is not in front")
+	})
+	if _, err := codex.restoreBinding(ctx, dir, host, inactive, old); err == nil {
+		t.Fatal("accepted an expired peer")
+	}
+	if got, err := codex.restoreBinding(ctx, dir, host, inactive, peer); err != nil || got != peer || codex.readLease(dir) != old {
+		t.Fatalf("expected the verified peer without adopting its identity: lease=%v err=%v", got, err)
+	}
+	active := sharedBindController(func(_ context.Context, req pluginruntime.SessionControlRequest) (pluginruntime.SessionControlResult, error) {
+		if target := req.Target.(sharedDesktopLease); target.Binding != old.Binding || target.TargetID != "replacement" {
+			t.Fatalf("wrong target or lost previous binding: %+v", target)
+		}
+		return pluginruntime.SessionControlResult{OK: true, Action: req.Action, ThreadID: old.Binding}, nil
+	})
+	if got, err := codex.restoreBinding(ctx, dir, host, active, sharedDesktopLease{}); err != nil || got.HostPID != host.HostPID || got.Binding != old.Binding || codex.readLease(dir) != got {
+		t.Fatalf("first recovery without a live peer failed: %+v %v", got, err)
+	}
+}
 
 func TestSharedDesktopSelectsExistingSharedWorkspace(t *testing.T) {
 	const origin = "http://127.0.0.1:9444"
