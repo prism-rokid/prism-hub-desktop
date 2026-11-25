@@ -2014,6 +2014,11 @@ func TestDashboardLoginManagerDeviceFlowPersistsConfig(t *testing.T) {
 }
 
 func TestDashboardLoginManagerPasswordLoginUsesDirectBind(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "daemon-runtime-state.json")
+	previousStatePath := daemonRuntimeStatePath
+	daemonRuntimeStatePath = func() string { return statePath }
+	t.Cleanup(func() { daemonRuntimeStatePath = previousStatePath })
+
 	var seenLoginBody map[string]any
 	var seenPluginRegistration map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2055,6 +2060,10 @@ func TestDashboardLoginManagerPasswordLoginUsesDirectBind(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("password login: %v", err)
+	}
+	state, err := readDaemonRuntimeState(statePath)
+	if err != nil || state.ConnectionState != "disconnected" {
+		t.Fatalf("unexpected post-login connection state: %+v, %v", state, err)
 	}
 	if payload["approved"] != true {
 		t.Fatalf("expected approved payload, got %+v", payload)
