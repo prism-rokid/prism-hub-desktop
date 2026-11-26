@@ -1069,6 +1069,19 @@ func TestDashboardStartCatalogOperationRefreshesFromEmptySnapshot(t *testing.T) 
 	}
 }
 
+func TestDashboardStartCatalogOperationRefreshesCacheWithoutCurrentPlatformAsset(t *testing.T) {
+	root := t.TempDir()
+	registry := pluginregistry.New(filepath.Join(root, "catalog.json"), "10.0.0", "4", dashboardRegistryTestFetcher{})
+	registry.Refresh(context.Background())
+	operation, err := dashboardStartCatalogOperation(context.Background(), registry, plugininstall.New(filepath.Join(root, "plugins")), "codex")
+	if err != nil {
+		t.Fatalf("没有当前平台资产时应允许刷新目录后继续安装：%v", err)
+	}
+	if operation.PluginID != "codex" {
+		t.Fatalf("unexpected install operation: %+v", operation)
+	}
+}
+
 func TestDashboardScanLocalPluginsDoesNotInstallBundledPlugin(t *testing.T) {
 	root := t.TempDir()
 	installRoot := filepath.Join(root, "installed")
@@ -2107,6 +2120,14 @@ func TestDashboardRestartCanBeDelegatedToDesktopShell(t *testing.T) {
 	}
 	if payload["action"] != "desktop_restart_scheduled" {
 		t.Fatalf("unexpected lifecycle restart payload: %+v", payload)
+	}
+}
+
+func TestDashboardPasswordLoginTimeout(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeDashboardPasswordLoginError(recorder, fmt.Errorf("prism bind login failed: %w", context.DeadlineExceeded))
+	if recorder.Code != http.StatusGatewayTimeout || !strings.Contains(recorder.Body.String(), "登录超时，请稍后重试。") {
+		t.Fatalf("unexpected login timeout response: %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 

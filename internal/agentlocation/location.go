@@ -64,6 +64,10 @@ func Lookup(id, mode string) (Rule, bool) {
 		r.LaunchKind = "desktop-app"
 		r.EnvKey = "PRISM_HERMES_APP_PATH"
 		r.Names = []string{"Hermes", "Hermes-Setup"}
+	case id == "dsh" && mode == "desktop":
+		r.LaunchKind = "desktop-app"
+		r.EnvKey = "PRISM_DSH_APP_PATH"
+		r.Names = []string{"DeepSeek Harness"}
 	case id == "hermes" && mode == "native":
 		r.LaunchKind = "cli"
 		r.EnvKey = "HERMES_BIN"

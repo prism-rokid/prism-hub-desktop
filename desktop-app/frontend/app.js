@@ -115,15 +115,18 @@ async function invoke(command, args) {
   return window.__TAURI__.core.invoke(command, args);
 }
 
-function dashboardURL({ reload = false } = {}) {
+function dashboardURL({ reload = false, loginHandoffUntil = 0 } = {}) {
   const url = new URL(hubURL);
   // 自定义 Tauri 协议下 WebKit 可能省略 document.referrer。
   // 显式传递 Shell 来源，以便校验目录选择回复的来源。
   url.searchParams.set("desktop_origin", window.location.origin);
   if (!reload) return url.href;
-  // A restart reuses the same localhost URL. Give the WebView a distinct
-  // navigation so it cannot retain the failed document from the old sidecar.
-  url.searchParams.set("desktop_restart", String(Date.now()));
+  // 重启会复用相同的本地 URL，给 WebView 增加一次独立导航，避免复用旧进程的失败页面。
+  const now = Date.now();
+  url.searchParams.set("desktop_restart", String(now));
+  if (Number.isSafeInteger(loginHandoffUntil) && loginHandoffUntil > now && loginHandoffUntil <= now + 30_000) {
+    url.searchParams.set("login_handoff_until", String(loginHandoffUntil));
+  }
   return url.href;
 }
 
@@ -158,7 +161,7 @@ async function waitForPreviousHubExit({ timeoutMs = 6000, intervalMs = 200 } = {
   }
 }
 
-async function restartDashboardAfterHubRestart() {
+async function restartDashboardAfterHubRestart(loginHandoffUntil = 0) {
   if (dashboardRestartInFlight) return;
   dashboardRestartInFlight = true;
   try {
@@ -168,13 +171,13 @@ async function restartDashboardAfterHubRestart() {
     // happened.
     await waitForPreviousHubExit();
     await invoke("ensure_hub_ready");
-    dashboard.src = dashboardURL({ reload: true });
+    dashboard.src = dashboardURL({ reload: true, loginHandoffUntil });
   } catch (error) {
     console.error("Prism Hub restart recovery failed", error);
     // Retain the same recovery behaviour as initial startup. This retry is
     // intentionally owned by the shell, so the Dashboard never turns the
     // expected restart window into a failed login message.
-    window.setTimeout(() => void restartDashboardAfterHubRestart(), 2000);
+    window.setTimeout(() => void restartDashboardAfterHubRestart(loginHandoffUntil), 2000);
   } finally {
     dashboardRestartInFlight = false;
   }
@@ -385,7 +388,7 @@ window.addEventListener("message", async (event) => {
         event.origin,
       );
     } else if (event.data?.type === "prism:hub-restart-scheduled") {
-      void restartDashboardAfterHubRestart();
+      void restartDashboardAfterHubRestart(event.data.loginHandoffUntil);
     } else if (event.data?.type === "prism:quit-hub") {
       await invoke("quit_prism_hub");
     } else if (event.data?.type === "prism:open-remote-panel") {

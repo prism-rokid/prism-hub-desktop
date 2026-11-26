@@ -7,13 +7,16 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"rokid-prism-hub/internal/agentlocation"
 	bridgeconfig "rokid-prism-hub/internal/config"
+	"rokid-prism-hub/internal/diagnostics"
 	pluginpkg "rokid-prism-hub/internal/plugin"
 	"rokid-prism-hub/internal/pluginruntime"
 )
@@ -95,6 +98,7 @@ var agentLocationOperations = struct {
 	items map[string]agentRecovery
 }{items: map[string]agentRecovery{}}
 var agentLocationConfigMu sync.Mutex
+var agentDiagnosticRevision atomic.Uint64
 
 func locationOperation(id string) agentRecovery {
 	agentLocationOperations.Lock()
@@ -412,7 +416,11 @@ func recoverLocatedAgent(parent context.Context, configPath, id, mode string, ca
 
 // 将运行时真实状态附加到已安装 manifest，包括当前不可用的 adapter。
 // 服务可能已经可访问，即使本地没有可启动的可执行文件。
-func annotateAgentLocations(cfg *bridgeconfig.Config, items []map[string]any) {
+func annotateAgentLocations(cfg *bridgeconfig.Config, items []map[string]any, desktopApps ...map[string]any) {
+	var desktopStatus map[string]any
+	if len(desktopApps) > 0 {
+		desktopStatus = desktopApps[0]
+	}
 	var wg sync.WaitGroup
 	for _, item := range items {
 		id, _ := item["plugin_id"].(string)
@@ -431,40 +439,100 @@ func annotateAgentLocations(cfg *bridgeconfig.Config, items []map[string]any) {
 			available := false
 			known := false
 			reason := ""
+			var probeError string
+			var pluginDiagnostic *pluginruntime.Diagnostic
 			if svc := currentDashboardRuntimePlugins(); svc != nil {
 				if adapter := svc.Adapter(id); adapter != nil {
 					cap, err := adapter.Probe(ctx)
 					known = true
 					available = err == nil && cap.Available
 					reason = cap.UnavailableReason
+					pluginDiagnostic = cap.Diagnostics
 					if err != nil {
 						reason = err.Error()
+						probeError = err.Error()
 					}
 				}
 			}
 			_, locErr := resolveAgentLocation(ctx, cfg, id, mode)
-			code := "runtime_offline"
-			lower := strings.ToLower(reason)
-			switch {
-			case available:
-				code = "ready"
-			case strings.Contains(lower, "auth") || strings.Contains(lower, "token") || strings.Contains(lower, "鉴权") || strings.Contains(lower, "登录"):
-				code = "authentication_failed"
-			case locErr != nil:
-				if _, manual := cfg.Bridge.Plugins[id].Locations[mode]; manual || agentlocation.Code(locErr) == "configured_location_invalid" {
-					code = "location_invalid"
-				} else {
-					code = "program_not_found"
-				}
-			case strings.Contains(lower, "state_db") || strings.Contains(lower, "session data") || strings.Contains(lower, "会话数据") || strings.Contains(lower, "codex_home"):
-				code = "data_unavailable"
-			case !known:
-				code = "runtime_unknown"
+			manualLocation := false
+			if cfg != nil {
+				_, manualLocation = cfg.Bridge.Plugins[id].Locations[mode]
 			}
-			item["runtime_status"] = map[string]any{"available": available, "known": known, "code": code, "reason": reason}
+			var installed, running, transportReachable *bool
+			transport := ""
+			if mode == "desktop" {
+				if appID, ok := item["desktop_app_id"].(string); ok && desktopStatus != nil {
+					if raw, ok := desktopStatus[appID].(map[string]any); ok {
+						if path, ok := raw["app_path"].(string); ok {
+							value := dashboardDesktopAppInstalled(path)
+							installed = &value
+						}
+						if value, ok := raw["running"].(bool); ok {
+							running = &value
+						}
+						if value, ok := raw["cdp_reachable"].(bool); ok {
+							transportReachable = &value
+						}
+						transport = "cdp"
+					}
+				}
+			}
+			locationError := errorString(locErr)
+			// 自动检测不到桌面程序时，优先展示“未安装”；只有用户保存过
+			// 手动路径仍然失效时，才展示“安装位置已失效”。
+			if mode == "desktop" && installed != nil && !*installed && !manualLocation {
+				locationError = ""
+			}
+			status := diagnostics.Classify(diagnostics.Input{
+				PluginID: id, Component: itemString(item, "display_name"), Available: available,
+				ProbeKnown: known, ProbeError: probeError, LegacyReason: reason, LocationError: locationError,
+				ManualLocation: manualLocation, Installed: installed, Running: running,
+				Transport: transport, TransportReachable: transportReachable,
+				Plugin: pluginDiagnostic, Revision: agentDiagnosticRevision.Add(1),
+			})
+			if status.Detail == "" {
+				status.Detail = strings.TrimSpace(reason)
+			}
+			item["runtime_status"] = map[string]any{
+				"state": status.State, "available": status.Available, "known": status.Known,
+				"code": status.Code, "summary": status.Summary, "detail": status.Detail,
+				"reason": status.Detail, "component": status.Component,
+				"actual_version": status.ActualVersion, "required_version": status.RequiredVersion,
+				"facts": status.Facts, "actions": status.Actions, "checked_at": status.CheckedAt,
+				"revision": status.Revision, "diagnostic_id": status.DiagnosticID,
+			}
 		}(item, id, mode)
 	}
 	wg.Wait()
+}
+
+func dashboardDesktopAppInstalled(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	if runtimeGOOS() == "windows" || runtimeGOOS() == "darwin" {
+		info, err := os.Stat(path)
+		return err == nil && !info.IsDir()
+	}
+	if _, err := os.Stat(path); err == nil {
+		return true
+	}
+	_, err := exec.LookPath(path)
+	return err == nil
+}
+
+func itemString(item map[string]any, key string) string {
+	value, _ := item[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func newAgentLocationResolver() *agentlocation.Resolver {

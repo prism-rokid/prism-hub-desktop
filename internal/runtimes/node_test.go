@@ -28,6 +28,13 @@ func archiveBinaryPath() string {
 	return "bin/node"
 }
 
+func testRuntimeBinaryPayload() []byte {
+	if runtime.GOOS == "windows" {
+		return []byte("MZnode")
+	}
+	return []byte("node")
+}
+
 func TestExpandCommandOnlyAllowsExactToken(t *testing.T) {
 	got, err := ExpandCommand([]string{"${runtime.node}", "dist/index.js"}, "/node/bin/node")
 	if err != nil || got[0] != "/node/bin/node" {
@@ -60,7 +67,7 @@ func TestEnsureNodeDownloadsOnceAndSharesRuntime(t *testing.T) {
 	var archive bytes.Buffer
 	gz := gzip.NewWriter(&archive)
 	tw := tar.NewWriter(gz)
-	payload := []byte("node")
+	payload := testRuntimeBinaryPayload()
 	if err := tw.WriteHeader(&tar.Header{Name: "node-v22.23.1-test/" + archiveBinaryPath(), Mode: 0o755, Size: int64(len(payload))}); err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +109,50 @@ func TestEnsureNodeRejectsOversizedDownloadFromContentLength(t *testing.T) {
 	}
 }
 
+func TestEnsureNodeRepairsInvalidCachedBinary(t *testing.T) {
+	root := t.TempDir()
+	m := NewNodeManager(root, nil)
+	if err := os.MkdirAll(filepath.Dir(m.Binary()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m.Binary(), []byte("bad"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var archive bytes.Buffer
+	zw := zip.NewWriter(&archive)
+	header := &zip.FileHeader{Name: "node-v22.23.1-test/" + archiveBinaryPath()}
+	header.SetMode(0o755)
+	file, err := zw.CreateHeader(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = file.Write(testRuntimeBinaryPayload()); err != nil {
+		t.Fatal(err)
+	}
+	if err = zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(archive.Bytes())
+	calls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write(archive.Bytes())
+	}))
+	defer server.Close()
+	m.Sources = []Source{{URL: server.URL + "/node.zip", SHA256: hex.EncodeToString(sum[:])}}
+	m.Client = server.Client()
+	if _, err := m.Ensure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("损坏的缓存 Runtime 应只重新下载一次，实际下载次数=%d", calls)
+	}
+	if err := validateRuntimeBinary(m.Binary()); err != nil {
+		t.Fatalf("修复后的 Runtime 仍无效：%v", err)
+	}
+}
+
 func TestEnsureNodeExtractsZIPRuntime(t *testing.T) {
 	var archive bytes.Buffer
 	zw := zip.NewWriter(&archive)
@@ -111,7 +162,7 @@ func TestEnsureNodeExtractsZIPRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = file.Write([]byte("node")); err != nil {
+	if _, err = file.Write(testRuntimeBinaryPayload()); err != nil {
 		t.Fatal(err)
 	}
 	if err = zw.Close(); err != nil {

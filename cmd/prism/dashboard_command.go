@@ -1695,15 +1695,9 @@ func dashboardStartCatalogOperation(ctx context.Context, registry *pluginregistr
 	if !selected.Compatible {
 		return plugininstall.Operation{}, fmt.Errorf("plugin %s requires a newer Hub", pluginID)
 	}
-	if !selected.Supported {
-		return plugininstall.Operation{}, fmt.Errorf("plugin %s does not support the current platform", pluginID)
-	}
-	if selected.Release == nil {
-		// A cached snapshot can predate a just-published release — for
-		// example a 404 cached before the plugin's first release existed.
-		// Refresh once before failing so a fresh release is installable
-		// without waiting out the periodic catalog interval or a manual
-		// refresh.
+	if selected.Release == nil || !selected.Supported || !dashboardReleaseHasCurrentPlatformAsset(selected.Release) {
+		// 缓存可能早于新发布版本、错误标记平台不支持，或者没有当前平台资产。
+		// 安装前主动刷新一次，避免 Windows 沿用旧缓存而进入错误的 Runtime 探测。
 		refreshed := registry.Refresh(ctx)
 		for _, item := range refreshed.Items {
 			if item.ID == pluginID {
@@ -1720,12 +1714,23 @@ func dashboardStartCatalogOperation(ctx context.Context, registry *pluginregistr
 		}
 		return plugininstall.Operation{}, fmt.Errorf("plugin %s has no installable stable release: %s", pluginID, detail)
 	}
+	if !selected.Supported {
+		return plugininstall.Operation{}, fmt.Errorf("plugin %s does not support the current platform", pluginID)
+	}
 	return installer.StartOperation(ctx, plugininstall.Request{
 		Entry:            selected.Entry,
 		Release:          selected.Release,
 		ExpectedProtocol: pluginregistry.DefaultProtocolVersion,
 		Prober:           dashboardReleaseProber{},
 	})
+}
+
+func dashboardReleaseHasCurrentPlatformAsset(release *pluginregistry.Release) bool {
+	if release == nil {
+		return false
+	}
+	_, ok := plugininstall.SelectAsset(release, runtime.GOOS, runtime.GOARCH)
+	return ok
 }
 
 func dashboardRegistryItems(registry *pluginregistry.Manager) []pluginregistry.Item {
@@ -4419,6 +4424,11 @@ func openDashboardLaunchLog() (*os.File, error) {
 }
 
 func writeDashboardPasswordLoginError(w http.ResponseWriter, err error) {
+	var networkError net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
+		writeDashboardError(w, http.StatusGatewayTimeout, "登录超时，请稍后重试。")
+		return
+	}
 	var responseError *prismapi.ResponseError
 	if errors.As(err, &responseError) && dashboardCredentialErrorCode(responseError.Code) {
 		writeDashboardJSON(w, http.StatusBadRequest, map[string]any{

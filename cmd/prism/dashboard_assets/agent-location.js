@@ -22,7 +22,11 @@ function agentLocationActionMarkup(item) {
   return `<button class="recovery-action" type="button" data-locate-agent="${escapeHtml(item.plugin_id)}"><i data-lucide="folder-search" aria-hidden="true"></i>${escapeHtml(t("location.action"))}</button>`;
 }
 function agentLocationRuntimeReason(item) {
-  const code = item.runtime_status?.code || "runtime_offline";
+  const status = item.runtime_status || {};
+  const code = status.code || "runtime_offline";
+  const summary = String(status.summary || "").trim();
+  const detail = String(status.detail || status.reason || "").trim();
+  if (summary) return detail && detail !== summary ? `${summary}：${detail}` : summary;
   const reason = ["program_not_found", "location_invalid", "data_unavailable", "authentication_failed"].includes(code)
     ? t(`location.${code}`)
     : t(code === "runtime_unknown" ? "location.runtime_unknown" : "location.runtime_offline");

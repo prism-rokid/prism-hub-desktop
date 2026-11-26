@@ -28,6 +28,7 @@ func TestValidateAgentLayouts(t *testing.T) {
 		{"codex", "desktop", "windows", filepath.Join("app", "ChatGPT.exe")},
 		{"codex", "desktop", "darwin", filepath.Join("Codex.app", "Contents", "MacOS", "Codex")},
 		{"hermes", "desktop", "darwin", filepath.Join("Contents", "MacOS", "Hermes")},
+		{"dsh", "desktop", "windows", "DeepSeek Harness.exe"},
 		{"hermes", "native", "windows", "hermes.exe"},
 		{"claudecode", "mod", "windows", "claude.cmd"},
 		{"openclaw", "native", "windows", "openclaw.cmd"},

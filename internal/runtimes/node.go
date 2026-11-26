@@ -92,7 +92,12 @@ func (m *NodeManager) Ensure(ctx context.Context) (string, error) {
 	nodeInstallMu.Lock()
 	defer nodeInstallMu.Unlock()
 	if _, err := os.Stat(m.Binary()); err == nil {
-		return m.Binary(), nil
+		if validateRuntimeBinary(m.Binary()) == nil {
+			return m.Binary(), nil
+		}
+		// 旧版本可能留下空文件或不完整的下载结果。只清理当前 Node
+		// 版本目录，保留账号、插件和其他版本的数据。
+		_ = os.RemoveAll(m.Dir())
 	}
 	if len(m.Sources) == 0 {
 		return "", errors.New("node runtime has no verified sources")
@@ -110,6 +115,31 @@ func (m *NodeManager) Ensure(ctx context.Context) (string, error) {
 		return m.Binary(), nil
 	}
 	return "", fmt.Errorf("install node runtime %s: %s", m.Version, strings.Join(errs, "; "))
+}
+
+// validateRuntimeBinary 检查已存在的 Node 文件是否至少具备当前平台的
+// 可执行文件特征，避免损坏缓存被误认为已安装并持续复用。
+func validateRuntimeBinary(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() < 4 {
+		return errors.New("Node Runtime 文件不完整")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(file, header); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" && (header[0] != 'M' || header[1] != 'Z') {
+		return errors.New("Windows Node Runtime 不是有效的 PE 文件")
+	}
+	return nil
 }
 func (m *NodeManager) install(ctx context.Context, source Source) error {
 	client := m.Client

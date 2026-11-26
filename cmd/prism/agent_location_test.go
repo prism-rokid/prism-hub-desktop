@@ -168,6 +168,26 @@ func TestAgentLocationStatusDoesNotRequireLocalExecutableForOnlineService(t *tes
 	}
 }
 
+func TestAgentLocationStatusUsesStructuredPluginDiagnostic(t *testing.T) {
+	previous := currentDashboardRuntimePlugins()
+	defer setDashboardRuntimePlugins(previous)
+	svc := pluginruntime.New(pluginruntime.StaticPlugin{PluginID: "claudecode", Capability: pluginruntime.Capability{
+		Diagnostics: &pluginruntime.Diagnostic{
+			State: "incompatible", Code: "dependency_version_mismatch", Summary: "Claude Code 版本过低",
+			ActualVersion: "2.1.203", RequiredVersion: ">=2.1.287",
+		},
+	}})
+	setDashboardRuntimePlugins(svc)
+	cfg := bridgeconfig.Default()
+	cfg.Bridge.Plugins["claudecode"] = bridgeconfig.PluginConfig{Mode: "mod"}
+	items := []map[string]any{{"plugin_id": "claudecode", "display_name": "Claude Code", "current_runtime_mode": "mod"}}
+	annotateAgentLocations(cfg, items)
+	status := items[0]["runtime_status"].(map[string]any)
+	if status["code"] != "dependency_version_mismatch" || status["actual_version"] != "2.1.203" || status["required_version"] != ">=2.1.287" {
+		t.Fatalf("结构化诊断丢失: %+v", status)
+	}
+}
+
 func TestAgentLocationResetPreservesOtherModeAndDataDirectory(t *testing.T) {
 	configPath, root := locationConfigFixture(t)
 	deadline := time.Now().Add(time.Second)

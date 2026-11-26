@@ -301,6 +301,25 @@ type Capability struct {
 	IntegrationMode   IntegrationMode `json:"IntegrationMode"`
 	VisibilitySurface string          `json:"VisibilitySurface"`
 	UnavailableReason string          `json:"UnavailableReason"`
+	// Diagnostics 为插件提供可选的结构化诊断。旧插件只返回
+	// UnavailableReason 时，Hub 会继续按兼容逻辑推断状态。
+	Diagnostics *Diagnostic `json:"Diagnostics,omitempty"`
+}
+
+// Diagnostic 描述插件自身才能判断的依赖、Mod、协议或握手问题。
+// 原始堆栈只用于详细诊断，不应作为卡片主文案返回。
+type Diagnostic struct {
+	State           string            `json:"State,omitempty"`
+	Code            string            `json:"Code,omitempty"`
+	Summary         string            `json:"Summary,omitempty"`
+	Detail          string            `json:"Detail,omitempty"`
+	Component       string            `json:"Component,omitempty"`
+	ActualVersion   string            `json:"ActualVersion,omitempty"`
+	RequiredVersion string            `json:"RequiredVersion,omitempty"`
+	Actions         []string          `json:"Actions,omitempty"`
+	Facts           map[string]any    `json:"Facts,omitempty"`
+	Stack           string            `json:"Stack,omitempty"`
+	Metadata        map[string]string `json:"Metadata,omitempty"`
 }
 
 type DiscoveryResult struct {

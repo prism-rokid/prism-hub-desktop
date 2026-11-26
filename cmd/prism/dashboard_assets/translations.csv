@@ -33,7 +33,9 @@ login.register_account,注册账号,Register account,アカウントを登録
 login.username_placeholder,手机号、邮箱或用户名,"Phone, email, or username",電話番号、メール、またはユーザー名
 login.password_placeholder,请输入密码,Enter your password,パスワードを入力
 login.checking_session,正在检查登录状态…,Checking sign-in status…,ログイン状態を確認中…
-login.checking_timeout,登录状态检查超时，请重试。,Sign-in status check timed out. Please try again.,ログイン状態の確認がタイムアウトしました。再試行してください。
+login.checking_timeout,暂时无法确认登录状态。请重试或查看诊断。,Unable to check sign-in status. Retry or open diagnostics.,ログイン状態を確認できません。再試行するか診断を開いてください。
+login.retry_session_check,重试,Retry,再試行
+login.submit_timeout,登录超时，请稍后重试。,Sign-in timed out. Please try again shortly.,ログインがタイムアウトしました。しばらくしてから再試行してください。
 status.hub,Hub,Hub,Hub
 status.server,服务器,Server,サーバー
 status.host_plugin_sync,Host Plugin,Host Plugin,Host Plugin
@@ -257,3 +259,6 @@ location.error_invalid_executable,请选择该安装目录内支持的启动程�
 location.error_location_failed,无法解析安装位置，请检查路径。,Cannot resolve installation location. Check the path.,インストール先を解決できません。パスを確認してください。
 location.recheck,重新检测,Detect again,再検出
 location.runtime_unknown,正在检测 Agent，请稍候。,Detecting Agent. Please wait.,Agent を検出しています。しばらくお待ちください。
+location.app_not_installed,"未安装桌面端，请先下载安装或指定安装位置。","Desktop app is not installed. Download it or choose its installation location.","デスクトップアプリがインストールされていません。ダウンロードするかインストール先を指定してください。"
+location.not_running,"已安装，尚未启动，请启动托管实例。","Installed but not running. Start a managed instance.","インストール済みですが起動していません。管理対象インスタンスを起動してください。"
+location.control_channel_unreachable,"应用已运行，但控制通道未连通，请重新托管启动。","The app is running, but its control channel is unreachable. Relaunch it under Prism.","アプリは実行中ですが制御チャネルに接続できません。Prism で再起動してください。"
