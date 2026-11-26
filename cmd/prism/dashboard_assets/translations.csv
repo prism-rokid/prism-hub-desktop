@@ -115,7 +115,7 @@ agent.runtime_mode,运行模式,Runtime mode,実行モード
 agent.edit_description,说明,Description,説明
 agent.edit_icon_url,图标 URL,Icon URL,アイコン URL
 agent.edit_save,保存 Agent 信息,Save Agent information,Agent 情報を保存
-agent.uninstall,卸载 Agent,Uninstall Agent,Agent をアンインストール
+agent.uninstall,卸载 Agent 插件,Uninstall Agent Plugin,Agent プラグインをアンインストール
 agent.managed_launch,托管 Agent,Launch managed Agent,管理 Agent を起動
 agent.managed_relaunch,重新托管 Agent,Relaunch managed Agent,管理 Agent を再起動
 agent.managed_starting,正在以 Prism 托管模式启动 {name}…,Starting {name} in Prism managed mode…,Prism 管理モードで {name} を起動しています…
