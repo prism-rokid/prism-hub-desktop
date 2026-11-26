@@ -109,6 +109,8 @@ agent.updating,更新中,Updating,更新中
 agent.requires_hub_update,需要升级 Hub,Hub update required,Hub の更新が必要
 agent.unsupported_platform,不支持当前平台,Unsupported on this platform,このプラットフォームは非対応
 agent.remote_enabled_success,{name} 已开启远程。,Remote enabled for {name}.,{name} のリモートを有効化しました。
+agent.remote_plugin_limit_reached,此账号的远程插件已达上限（所有设备合计 {limit} 个）。请先关闭一个插件的远程访问再试。,"Your account has reached the limit of {limit} remote plugins across all devices. Turn off remote access for one plugin, then try again.",このアカウントのリモートプラグインは全デバイス合計で上限の {limit} 件に達しました。いずれかのプラグインのリモートアクセスをオフにしてから再試行してください。
+agent.remote_plugin_limit_reached_unknown,此账号的远程插件已达上限。请先关闭一个插件的远程访问再试。,"Your account has reached its remote plugin limit. Turn off remote access for one plugin, then try again.",このアカウントのリモートプラグイン数が上限に達しました。いずれかのプラグインのリモートアクセスをオフにしてから再試行してください。
 agent.rename,编辑 Agent 信息,Edit Agent information,Agent 情報を編集
 agent.runtime_mode,运行模式,Runtime mode,実行モード
 agent.edit_description,说明,Description,説明

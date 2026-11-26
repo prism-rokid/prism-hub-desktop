@@ -64,6 +64,7 @@ type ResponseError struct {
 	Code    string
 	Message string
 	Body    string
+	Data    json.RawMessage
 }
 
 // IsNotFoundError reports whether an API operation already reached the
@@ -303,14 +304,16 @@ func isPrismAPISuccessCode(code string) bool {
 
 func apiResponseError(status string, body []byte) error {
 	var envelope struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		Code    string          `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(body, &envelope); err == nil && (strings.TrimSpace(envelope.Code) != "" || strings.TrimSpace(envelope.Message) != "") {
 		return &ResponseError{
 			Status:  status,
 			Code:    strings.TrimSpace(envelope.Code),
 			Message: strings.TrimSpace(envelope.Message),
+			Data:    envelope.Data,
 		}
 	}
 	return &ResponseError{Status: status, Body: strings.TrimSpace(string(body))}

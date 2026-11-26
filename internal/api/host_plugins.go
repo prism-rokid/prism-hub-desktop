@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"rokid-prism-hub/internal/config"
@@ -36,6 +38,36 @@ type HostPluginList struct {
 	Address     string       `json:"address"`
 	HostAddress string       `json:"host_address"`
 	Items       []HostPlugin `json:"items"`
+}
+
+const RemotePluginLimitReachedCode = "remote_plugin_limit_reached"
+
+// RemotePluginLimit reports quota failures from both current and older Prism APIs.
+// A nil limit means the rejection did not include a usable numeric limit.
+func RemotePluginLimit(err error) (limit *int, reached bool) {
+	var response *ResponseError
+	if !errors.As(err, &response) || response == nil {
+		return nil, false
+	}
+	switch response.Code {
+	case RemotePluginLimitReachedCode:
+		var details struct {
+			Limit *int `json:"limit"`
+		}
+		if json.Unmarshal(response.Data, &details) == nil && details.Limit != nil && *details.Limit >= 0 {
+			return details.Limit, true
+		}
+		return nil, true
+	case "invalid_parameter":
+		value, found := strings.CutPrefix(response.Message, "remote plugins exceed limit: ")
+		if found {
+			if parsed, parseErr := strconv.Atoi(value); parseErr == nil && parsed >= 0 {
+				return &parsed, true
+			}
+			return nil, true
+		}
+	}
+	return nil, false
 }
 
 func ListUserHostPlugins(apiURL string, account config.Account, hostID string) (HostPluginList, error) {

@@ -4099,7 +4099,7 @@
                   <strong>${t("agent.enable_remote")}</strong>
                 </div>
               </div>
-              <input class="switch" type="checkbox" data-local-remote-enabled="${escapeHtml(pluginId)}" ${remoteEnabled ? "checked" : ""} ${runtimeUnavailable ? "disabled" : ""}>
+              <input class="switch" type="checkbox" data-local-remote-enabled="${escapeHtml(pluginId)}" ${remoteEnabled ? "checked" : ""} ${runtimeUnavailable && !remoteEnabled ? "disabled" : ""}>
             </label>
             <button class="menu-action" type="button" data-edit-agent="${escapeHtml(pluginId)}">
               <i data-lucide="pencil" aria-hidden="true"></i>
@@ -4251,7 +4251,7 @@
         button.addEventListener("click", () => openAgentMetadataEditor(button.dataset.editAgent));
       });
       document.querySelectorAll("[data-local-remote-enabled], [data-remote-enabled]").forEach((toggle) => {
-        toggle.addEventListener("change", () => updateLocalRemoteEnabled(toggle));
+        toggle.addEventListener("change", () => runDashboardAction("plugins-message", () => updateLocalRemoteEnabled(toggle)));
       });
       document.querySelectorAll("[data-launch-desktop]").forEach((button) => {
         button.addEventListener("click", () => runDashboardAction("plugins-message", () => launchDesktopApp(button.dataset.launchDesktop)));
@@ -5153,6 +5153,12 @@
         body: JSON.stringify({ plugin_id: pluginId, enabled: Boolean(enabled) }),
       });
       const data = await response.json();
+      if (data.code === "remote_plugin_limit_reached") {
+        const key = Number.isInteger(data.limit) && data.limit >= 0
+          ? "agent.remote_plugin_limit_reached"
+          : "agent.remote_plugin_limit_reached_unknown";
+        throw new Error(t(key, { limit: data.limit }));
+      }
       if (!response.ok || data.accepted !== true) throw new Error(data.error || "更新远程状态失败");
       return data;
     }
@@ -5366,7 +5372,14 @@
           const key = toggle.dataset.recoveryKey || "remote-enable";
           const pluginId = toggle.dataset.recoveryPlugin;
           if (toggle.dataset.recoveryToggle !== "remote-enabled" || !toggle.checked) return;
-          runRecoveryAction(toggle, key, () => enableRemoteRecovery(pluginId), {
+          runRecoveryAction(toggle, key, async () => {
+            try {
+              await enableRemoteRecovery(pluginId);
+            } catch (error) {
+              toggle.checked = false;
+              throw error;
+            }
+          }, {
             successMessage: () => t("agent.remote_enabled_success", { name: pluginDisplayName(pluginId) }),
           });
         });

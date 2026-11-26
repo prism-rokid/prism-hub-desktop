@@ -1446,6 +1446,14 @@ func serveDashboardUIContextWithOptions(ctx context.Context, configPath, dbPath,
 		}
 		payload, err := applyDashboardHostPluginChange(cfg, pluginID, *req.Enabled)
 		if err != nil {
+			if limit, reached := prismapi.RemotePluginLimit(err); reached {
+				writeDashboardJSON(w, http.StatusConflict, map[string]any{
+					"ok":    false,
+					"code":  prismapi.RemotePluginLimitReachedCode,
+					"limit": limit,
+				})
+				return
+			}
 			writeDashboardError(w, http.StatusBadRequest, err.Error())
 			return
 		}

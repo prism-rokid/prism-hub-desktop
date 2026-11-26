@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,42 @@ import (
 
 	"rokid-prism-hub/internal/config"
 )
+
+func TestRegisterUserHostPluginReportsRemotePluginLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		body    string
+		reached bool
+		limit   int
+	}{
+		{"structured", http.StatusConflict, `{"code":"remote_plugin_limit_reached","message":"quota reached","data":{"limit":12}}`, true, 12},
+		{"legacy", http.StatusInternalServerError, `{"code":"invalid_parameter","message":"remote plugins exceed limit: 7"}`, true, 7},
+		{"zero", http.StatusConflict, `{"code":"remote_plugin_limit_reached","data":{"limit":0}}`, true, 0},
+		{"unknown", http.StatusConflict, `{"code":"remote_plugin_limit_reached"}`, true, -1},
+		{"unrelated", http.StatusInternalServerError, `{"code":"invalid_parameter","message":"valid plugin_id required"}`, false, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			defer server.Close()
+
+			_, err := RegisterUserHostPlugin(server.URL, testAccount(), "host-1", nil)
+			limit, reached := RemotePluginLimit(err)
+			if reached != tc.reached {
+				t.Fatalf("quota rejection = %v, want %v (API error: %v)", reached, tc.reached, err)
+			}
+			if tc.limit < 0 && limit != nil {
+				t.Fatalf("unexpected quota limit: %d", *limit)
+			}
+			if tc.limit >= 0 && (limit == nil || *limit != tc.limit) {
+				t.Fatalf("expected quota limit %d from %s", tc.limit, tc.body)
+			}
+		})
+	}
+}
 
 func TestListUserHostPluginsPreservesHostForbiddenCode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
