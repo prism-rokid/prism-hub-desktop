@@ -9,6 +9,7 @@ const source = html.slice(html.indexOf('    function localPluginCard('), html.in
 test('an offline local Agent can turn off an existing remote registration', () => {
   let registered = true
   const context = {
+    state: { recoveryActions: new Set() },
     hostPluginFor: id => registered ? { plugin_id: id } : null,
     localPresentation: item => item,
     pluginRuntimeModes: () => [],
@@ -31,6 +32,10 @@ test('an offline local Agent can turn off an existing remote registration', () =
   const registeredOffline = renderSwitch('not_running')
   assert.match(registeredOffline, /\bchecked\b/)
   assert.doesNotMatch(registeredOffline, /\sdisabled\b/)
+
+  context.state.recoveryActions.add('remote-enable:dsh')
+  assert.match(renderSwitch('not_running'), /\sdisabled\b/)
+  context.state.recoveryActions.clear()
 
   registered = false
   assert.match(renderSwitch('not_running'), /\sdisabled\b/)

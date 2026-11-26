@@ -222,7 +222,9 @@ type CatalogPlugin struct {
 	AvailabilityReason string `json:"availability_reason,omitempty"`
 	// Enabled means this plugin is currently admitted into the host's remote
 	// mainline candidate set, not merely that a local plugin exists.
-	Enabled             bool   `json:"enabled,omitempty"`
+	Enabled bool `json:"enabled,omitempty"`
+	// RemoteSupported describes existing conversation support. Creation has
+	// separate capabilities, including for a remotely visible plugin.
 	RemoteSupported     bool   `json:"remote_supported,omitempty"`
 	RemoteSupportReason string `json:"remote_support_reason,omitempty"`
 	// VisibleInRemote is the host-side "eligible to be remotely shown" result
@@ -241,11 +243,11 @@ type CatalogPlugin struct {
 	RuntimeModes               []string                            `json:"runtime_modes,omitempty"`
 	CurrentRuntimeMode         string                              `json:"current_runtime_mode,omitempty"`
 	CanAttachSession           bool                                `json:"can_attach_session,omitempty"`
-	CanStartSessionWithMessage bool                                `json:"can_start_session_with_message,omitempty"`
-	CanOpenDraft               bool                                `json:"can_open_draft,omitempty"`
+	CanStartSessionWithMessage bool                                `json:"can_start_session_with_message"`
+	CanOpenDraft               bool                                `json:"can_open_draft"`
 	CanListSessions            bool                                `json:"can_list_sessions,omitempty"`
 	CanReadHistory             bool                                `json:"can_read_history,omitempty"`
-	CanInterrupt               bool                                `json:"can_interrupt,omitempty"`
+	CanInterrupt               bool                                `json:"can_interrupt"`
 	CanApproval                bool                                `json:"can_approval,omitempty"`
 	CanForwardSync             bool                                `json:"can_forward_sync,omitempty"`
 	CanReverseSync             bool                                `json:"can_reverse_sync,omitempty"`

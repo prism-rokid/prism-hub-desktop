@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -199,6 +200,7 @@ type dashboardDesktopAppSpec struct {
 	UserDataEnvKey string
 	MacQuitScripts []string
 	LinuxCommand   string
+	SharedDesktop  *sharedDesktopAgent
 }
 
 type dashboardRestartFunc func(configPath, dbPath, reason string) map[string]any
@@ -1293,7 +1295,7 @@ func serveDashboardUIContextWithOptions(ctx context.Context, configPath, dbPath,
 				if len(req.DesktopApps) > 0 && len(locationChanges) == 0 {
 					if reloader := currentDashboardRuntimePluginReloader(); reloader != nil {
 						for appID := range req.DesktopApps {
-							if spec, ok := dashboardDesktopAppSpecByID(appID); ok {
+							if spec, ok := configuredDesktopApp(cfg, appID); ok {
 								reloadCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 								_ = reloader.ReloadPlugin(reloadCtx, spec.PluginID)
 								cancel()
@@ -1946,6 +1948,30 @@ func dashboardDesktopAppSpecByID(appID string) (dashboardDesktopAppSpec, bool) {
 	return dashboardDesktopAppSpec{}, false
 }
 
+func dashboardManifestDesktopApp(m pluginpkg.Manifest, id string) (dashboardDesktopAppSpec, bool) {
+	if app, ok := dashboardDesktopAppSpecByID(id); ok {
+		return app, true
+	}
+	for _, target := range m.ManagedLaunchSpecs {
+		if target.App == m.ID && target.App == id && target.SharedWindow == pluginpkg.SharedChatGPTWindow {
+			agent := &sharedDesktopAgent{pluginID: m.ID, displayName: m.DisplayName}
+			return dashboardDesktopAppSpec{AppID: m.ID, PluginID: m.ID, DisplayName: m.DisplayName, SharedDesktop: agent}, true
+		}
+	}
+	return dashboardDesktopAppSpec{}, false
+}
+
+func configuredDesktopApp(cfg *bridgeconfig.Config, id string) (dashboardDesktopAppSpec, bool) {
+	if spec, ok := dashboardDesktopAppSpecByID(id); ok {
+		return spec, true
+	}
+	item, err := dashboardPluginManifest(cfg, id)
+	if err != nil {
+		return dashboardDesktopAppSpec{}, false
+	}
+	return dashboardManifestDesktopApp(item.Manifest, id)
+}
+
 var dashboardHubReachable = hubReachable
 
 func collectDashboardStatus(configPath, dbPath string) dashboardStatus {
@@ -2108,7 +2134,7 @@ func dashboardDesktopAppSpecsForPlugins(pluginDirs []string) []dashboardDesktopA
 		if appID == "" {
 			continue
 		}
-		if spec, ok := dashboardDesktopAppSpecByID(appID); ok {
+		if spec, ok := dashboardManifestDesktopApp(item.Manifest, appID); ok {
 			out = append(out, spec)
 		}
 	}
@@ -2126,8 +2152,8 @@ func autoDetectedDesktopAppEnv(manifest pluginpkg.Manifest) map[string]string {
 	if appID == "" {
 		return nil
 	}
-	spec, ok := dashboardDesktopAppSpecByID(appID)
-	if !ok {
+	spec, ok := dashboardManifestDesktopApp(manifest, appID)
+	if !ok || spec.SharedDesktop != nil {
 		return nil
 	}
 	out := make(map[string]string, 2)
@@ -2171,6 +2197,9 @@ func dashboardDesktopAppStatus(cfg *bridgeconfig.Config, pluginDirs []string, sp
 }
 
 func dashboardDesktopAppStatusWithManagedLaunch(cfg *bridgeconfig.Config, pluginDirs []string, spec dashboardDesktopAppSpec, managed bool) map[string]any {
+	if spec.SharedDesktop != nil {
+		return spec.SharedDesktop.status(cfg, managed)
+	}
 	pluginEnv := map[string]string{}
 	if cfg != nil && cfg.Bridge.Plugins != nil {
 		pluginEnv = bridgeconfig.NormalizePluginEnv(cfg.Bridge.Plugins[spec.PluginID].Env)
@@ -3222,11 +3251,18 @@ func handleDashboardDesktopAction(configPath, appID, action string) (map[string]
 	if err != nil {
 		return nil, fmt.Errorf("load config failed: %w", err)
 	}
-	spec, ok := dashboardDesktopAppSpecByID(appID)
+	spec, ok := configuredDesktopApp(cfg, appID)
 	if !ok {
 		return nil, fmt.Errorf("unsupported desktop app: %s", appID)
 	}
 	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "bind":
+		item, err := dashboardPluginManifest(cfg, spec.PluginID)
+		if err != nil || !supportsSharedDesktopHost(item) {
+			return nil, fmt.Errorf("plugin does not declare shared window binding")
+		}
+		spec.SharedDesktop = &sharedDesktopAgent{pluginID: item.Manifest.ID, displayName: item.Manifest.DisplayName}
+		return dashboardStartManagedDesktopApp(cfg, spec)
 	case "start", "restart", "launch":
 		return dashboardStartManagedDesktopApp(cfg, spec)
 	default:
@@ -3246,6 +3282,15 @@ func dashboardStartManagedDesktopAppWithoutStop(cfg *bridgeconfig.Config, spec d
 	return dashboardStartManagedDesktopAppOptions(cfg, spec, false)
 }
 func dashboardStartManagedDesktopAppOptions(cfg *bridgeconfig.Config, spec dashboardDesktopAppSpec, allowStop bool) (map[string]any, error) {
+	if agent := spec.SharedDesktop; agent != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := agent.ensureWindow(ctx, cfg); err != nil {
+			slog.Warn("shared window binding failed", "plugin_id", spec.PluginID, "reason", err)
+			return nil, err
+		}
+		return map[string]any{"ok": true, "action": "start", "desktop_app": spec.AppID, "message": fmt.Sprintf("%s 已绑定到 Codex 的共用窗口。", spec.DisplayName)}, nil
+	}
 	if runtimeGOOS() != "darwin" && runtimeGOOS() != "windows" {
 		return nil, fmt.Errorf("managed %s launch is currently unsupported on %s", spec.DisplayName, runtimeGOOS())
 	}
@@ -3255,6 +3300,19 @@ func dashboardStartManagedDesktopAppOptions(cfg *bridgeconfig.Config, spec dashb
 	}
 	defer dashboardManagedDesktopLaunchMu.Unlock()
 	pluginDirs := pluginDirs(cfg)
+	if spec.AppID == "codex" && runtimeGOOS() == "darwin" && len(sharedDesktopAgents(pluginDirs)) > 0 {
+		dir, err := desktopHostRuntimeDirectory()
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		release, err := lockChatGPTDesktopHost(ctx, dir)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+	}
 	status := dashboardDesktopAppStatus(cfg, pluginDirs, spec)
 	if fmt.Sprint(status["managed_enabled"]) != "true" {
 		return nil, fmt.Errorf("当前插件没有声明托管启动能力，不能执行托管操作")
@@ -3705,7 +3763,7 @@ func applyDashboardDesktopAppOverrides(cfg *bridgeconfig.Config, apps map[string
 		return
 	}
 	for appID, app := range apps {
-		if spec, ok := dashboardDesktopAppSpecByID(appID); ok {
+		if spec, ok := configuredDesktopApp(cfg, appID); ok {
 			applyDashboardDesktopAppOverridesForSpec(cfg, spec, app)
 		}
 	}
@@ -3994,9 +4052,12 @@ func dashboardHostPluginRegistrationPayloadWithService(cfg *bridgeconfig.Config,
 		if reason == "" {
 			reason = "runtime unavailable"
 		}
+		if spec, ok := dashboardManifestDesktopApp(target.Manifest, manifestDesktopAppID(target.Manifest)); ok && spec.SharedDesktop != nil {
+			return nil, fmt.Errorf("%s 共用窗口未就绪。请先将它绑定到 Codex 托管窗口。%s", spec.DisplayName, reason)
+		}
 		return nil, fmt.Errorf("plugin %s runtime unavailable: %s", pluginID, reason)
 	}
-	if supported, reason := dashboardRemoteSupportFromCapability(status.Capability); !supported {
+	if supported, reason := pluginruntime.RemoteContinuationSupport(status.Capability); !supported {
 		return nil, fmt.Errorf("plugin %s does not satisfy remote session requirements: %s", pluginID, reason)
 	}
 	metadata := dashboardMetadataFromAdapter(adapter)
@@ -4106,25 +4167,6 @@ func dashboardMetadataFromAdapter(adapter pluginruntime.PluginAdapter) pluginrun
 		return provider.LocalMetadata()
 	}
 	return pluginruntime.LocalMetadata{}
-}
-
-func dashboardRemoteSupportFromCapability(capability pluginruntime.Capability) (bool, string) {
-	switch {
-	case !capability.CanForwardSync:
-		return false, "missing_forward_sync"
-	case !capability.CanListSessions:
-		return false, "missing_list_sessions"
-	case !capability.CanReadHistory:
-		return false, "missing_read_history"
-	case !capability.CanWaitRun:
-		return false, "missing_wait_run"
-	case !capability.CanAttachSession:
-		return false, "missing_attach_session"
-	case !capability.CanStartSessionWithMessage:
-		return false, "missing_start_session_with_message"
-	default:
-		return true, ""
-	}
 }
 
 func dashboardDisplayName(id string) string {

@@ -6,6 +6,26 @@ import (
 	bridgeconfig "rokid-prism-hub/internal/config"
 )
 
+// RemoteContinuationSupport reports whether Prism can browse and continue
+// existing conversations. Starting a conversation or draft has its own
+// capability and is checked by the route that performs it.
+func RemoteContinuationSupport(capability Capability) (bool, string) {
+	switch {
+	case !capability.CanForwardSync:
+		return false, "missing_forward_sync"
+	case !capability.CanListSessions:
+		return false, "missing_list_sessions"
+	case !capability.CanReadHistory:
+		return false, "missing_read_history"
+	case !capability.CanWaitRun:
+		return false, "missing_wait_run"
+	case !capability.CanAttachSession:
+		return false, "missing_attach_session"
+	default:
+		return true, ""
+	}
+}
+
 const (
 	ReverseSyncOff              = "off"
 	ReverseSyncPrismManagedOnly = "prism_managed_only"

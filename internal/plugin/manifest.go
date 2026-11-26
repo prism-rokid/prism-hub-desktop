@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -93,11 +94,14 @@ const (
 	maxLaunchReadyTimeoutMs     = 120_000
 )
 
+const SharedChatGPTWindow = "chatgpt-single-window-v2"
+
 // ManagedLaunchSpec declares one externally launchable target. Service specs
 // carry their own start/stop argv (exec'd directly, resolved via PATH — never
 // a shell); desktop-app specs reference the hub's desktop app registry by app
 // id (default: the plugin id), which owns the machine-level launch knowledge.
 type ManagedLaunchSpec struct {
+	SharedWindow   string   `json:"shared_window,omitempty" yaml:"shared_window,omitempty"`
 	Kind           string   `json:"kind" yaml:"kind"`
 	App            string   `json:"app,omitempty" yaml:"app,omitempty"`
 	Start          []string `json:"start,omitempty" yaml:"start,omitempty"`
@@ -381,9 +385,15 @@ func (m Manifest) Validate() error {
 	return nil
 }
 
+var sharedWindowPluginID = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,127}$`)
+
 func validateLaunchSpecs(m Manifest) error {
 	seen := make(map[string]bool)
 	for _, spec := range m.ManagedLaunchSpecs {
+		if spec.SharedWindow != "" && (spec.SharedWindow != SharedChatGPTWindow || spec.Kind != LaunchKindDesktopApp ||
+			spec.App != m.ID || !sharedWindowPluginID.MatchString(m.ID) || spec.Ready != LaunchReadyProbe) {
+			return fmt.Errorf("shared_window requires a matching desktop-app ID, probe readiness and a supported coordination protocol")
+		}
 		switch spec.Kind {
 		case LaunchKindDesktopApp:
 			if len(spec.Start) != 0 || len(spec.Stop) != 0 {

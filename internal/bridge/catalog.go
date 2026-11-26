@@ -111,7 +111,7 @@ func catalogPluginFromStatus(ctx context.Context, st pluginruntime.PluginStatus,
 			item.AgentUsage = catalogAgentUsage(usage)
 		}
 	}
-	item.RemoteSupported, item.RemoteSupportReason = remoteConversationSupport(item)
+	item.RemoteSupported, item.RemoteSupportReason = pluginruntime.RemoteContinuationSupport(st.Capability)
 	item.VisibleInRemote = item.Enabled && item.RemoteSupported
 
 	// AvailabilityReason distinguishes the three client-facing tiers:
@@ -163,42 +163,6 @@ func metadataFromAdapter(adapter pluginruntime.PluginAdapter) pluginruntime.Loca
 		return provider.LocalMetadata()
 	}
 	return pluginruntime.LocalMetadata{}
-}
-
-func remoteConversationSupport(item transport.CatalogPlugin) (bool, string) {
-	switch {
-	case !item.Installed:
-		return false, "not_installed"
-	case !item.CanForwardSync:
-		return false, "missing_forward_sync"
-	case !item.CanListSessions:
-		return false, "missing_list_sessions"
-	case !item.CanReadHistory:
-		return false, "missing_read_history"
-	case !item.CanWaitRun:
-		return false, "missing_wait_run"
-	case !item.CanAttachSession:
-		return false, "missing_attach_session"
-	case !item.CanStartSessionWithMessage:
-		return false, "missing_start_session_with_message"
-	default:
-		return true, ""
-	}
-}
-
-func remoteConversationSupportFromCapability(capability pluginruntime.Capability) (bool, string) {
-	return remoteConversationSupport(transport.CatalogPlugin{
-		Installed:                  true,
-		CanForwardSync:             capability.CanForwardSync,
-		CanListSessions:            capability.CanListSessions,
-		CanReadHistory:             capability.CanReadHistory,
-		CanWaitRun:                 capability.CanWaitRun,
-		CanReadStatus:              capability.CanReadStatus,
-		CanControlSession:          capability.CanControlSession,
-		CanAttachSession:           capability.CanAttachSession,
-		CanStartSessionWithMessage: capability.CanStartSessionWithMessage,
-		CanOpenDraft:               capability.CanOpenDraft,
-	})
 }
 
 // displayFromID turns an adapter id like "openclaw" into "OpenClaw" by

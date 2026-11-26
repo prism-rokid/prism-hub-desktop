@@ -8,6 +8,24 @@ import (
 	"testing"
 )
 
+func TestCatalogPluginSerializesDisabledCreationAndInterruptCapabilities(t *testing.T) {
+	encoded, err := json.Marshal(CatalogPlugin{
+		PluginID: "dot", RemoteSupported: true, VisibleInRemote: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plugin map[string]any
+	if err := json.Unmarshal(encoded, &plugin); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"can_start_session_with_message", "can_open_draft", "can_interrupt"} {
+		if plugin[key] != false {
+			t.Fatalf("expected explicit false for %q, got %s", key, encoded)
+		}
+	}
+}
+
 func TestVersionLessThan(t *testing.T) {
 	if !VersionLessThan("2.0", "2.1") {
 		t.Fatal("expected 2.0 < 2.1")

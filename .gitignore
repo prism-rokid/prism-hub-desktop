@@ -10,7 +10,6 @@ plugins/codex.automation/bin/*
 *.dll
 *.so
 *.dylib
-*.sqlite
 /main-*.js
 
 # Go build cache
@@ -41,6 +40,11 @@ config.yaml
 !config.sample.yaml
 
 # Data directories
+.prism/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
 data/
 logs/
 *.log
@@ -61,16 +65,8 @@ vendor/runtime/
 
 # Desktop shell artifacts
 desktop-shell/
-desktop-shell/node_modules/
-desktop-shell/src-tauri/target/
-desktop-shell/resources/
-desktop-shell/dist/
-desktop-shell/.tauri/
-desktop-shell/.runtime-cache/
-desktop-shell/runtime/
 
 # Tauri desktop application artifacts
-desktop-app/node_modules/
 desktop-app/src-tauri/target/
 desktop-app/src-tauri/gen/
 desktop-app/resources/

@@ -40,8 +40,12 @@ type SnapshotPublisher struct {
 	mu            sync.Mutex
 	fingerprints  map[string]string
 	lastPublished map[string]time.Time
-	indexMu       sync.Mutex
-	indexes       map[string]prismtransport.ConversationIndexPlugin
+	// Serialize complete directory builds with their publication so that a slow
+	// startup probe cannot overwrite a subsequent recovery with old results.
+	directoryMu         sync.Mutex
+	indexMu             sync.Mutex
+	indexes             map[string]prismtransport.ConversationIndexPlugin
+	catalogAvailability map[string]bool
 }
 
 func NewSnapshotPublisher(service *pluginruntime.Service, db *bridgedb.DB, cfg *bridgeconfig.Config, configProvider func() *bridgeconfig.Config, sink PrismSink, detailSnapshots *DetailSnapshotStore, logger *slog.Logger) *SnapshotPublisher {
@@ -130,10 +134,24 @@ func (p *SnapshotPublisher) PublishCatalog(ctx context.Context, force bool) erro
 	if p == nil || p.Sink == nil {
 		return nil
 	}
-	payload := prismtransport.CatalogSnapshotPayload{
-		Plugins: BuildCatalogPlugins(ctx, p.Service, p.DB, p.CurrentConfig()),
+	p.directoryMu.Lock()
+	defer p.directoryMu.Unlock()
+	return p.publishCatalog(ctx, force)
+}
+
+func (p *SnapshotPublisher) publishCatalog(ctx context.Context, force bool) error {
+	payload := prismtransport.CatalogSnapshotPayload{Plugins: BuildCatalogPlugins(ctx, p.Service, p.DB, p.CurrentConfig())}
+	if err := p.publish("catalog", prismtransport.MsgCatalogSnapshot, payload, force); err != nil {
+		return err
 	}
-	return p.publish("catalog", prismtransport.MsgCatalogSnapshot, payload, force)
+	availability := make(map[string]bool, len(payload.Plugins))
+	for _, item := range payload.Plugins {
+		availability[item.PluginID] = item.Available
+	}
+	p.indexMu.Lock()
+	p.catalogAvailability = availability
+	p.indexMu.Unlock()
+	return nil
 }
 
 // PublishIndex publishes complete index scopes. Supplying plugin IDs limits the
@@ -142,6 +160,12 @@ func (p *SnapshotPublisher) PublishIndex(ctx context.Context, force bool, plugin
 	if p == nil || p.Sink == nil {
 		return nil
 	}
+	p.directoryMu.Lock()
+	defer p.directoryMu.Unlock()
+	return p.publishIndex(ctx, force, pluginIDs...)
+}
+
+func (p *SnapshotPublisher) publishIndex(ctx context.Context, force bool, pluginIDs ...string) error {
 	snapshot := BuildConversationIndex(ctx, p.Service, p.DB, p.CurrentConfig(), pluginIDs...)
 	for _, plugin := range snapshot {
 		pluginID := strings.TrimSpace(plugin.PluginID)
@@ -152,7 +176,6 @@ func (p *SnapshotPublisher) PublishIndex(ctx context.Context, force bool, plugin
 			p.Logger.Debug("publish conversation index snapshot", "plugin_id", pluginID, "conversation_count", len(plugin.Conversations), "force", force)
 		}
 		plugins := []prismtransport.ConversationIndexPlugin{plugin}
-		p.storeConversationIndex(plugin)
 		payload := prismtransport.ConversationIndexSnapshotPayload{
 			Plugins:   plugins,
 			Signature: ConversationIndexSnapshotSignature(plugins),
@@ -160,6 +183,7 @@ func (p *SnapshotPublisher) PublishIndex(ctx context.Context, force bool, plugin
 		if err := p.publish("index:"+pluginID, prismtransport.MsgConversationIndexSnapshot, payload, force); err != nil {
 			return err
 		}
+		p.storeConversationIndex(plugin)
 	}
 	return nil
 }
@@ -207,37 +231,40 @@ func (p *SnapshotPublisher) HasConversationIndex(pluginID string) bool {
 	return ok
 }
 
-// RebuildConversationIndexIfStale rebuilds a cached complete index when the
-// Plugin's current availability no longer matches the cached projection. A
-// desktop-automation plugin can build its index while its live-control surface
-// is unavailable (for example before a managed launch): the read-only session
-// list stays valid, but remote clients would keep seeing an unavailable agent
-// after the runtime recovers. Rebuilding republishes the complete scope with
-// the current availability and sessions.
+// RebuildConversationIndexIfStale publishes recovery before a foreground
+// detail or its body can be delivered against an unavailable cloud directory.
 func (p *SnapshotPublisher) RebuildConversationIndexIfStale(ctx context.Context, pluginID string, available bool) error {
-	if p == nil {
+	if p == nil || p.Sink == nil {
 		return nil
 	}
 	pluginID = strings.TrimSpace(pluginID)
-	if pluginID == "" {
+	needsCatalog, needsIndex := p.staleAvailability(pluginID, available)
+	if !needsCatalog && !needsIndex {
 		return nil
 	}
+	p.directoryMu.Lock()
+	defer p.directoryMu.Unlock()
+	needsCatalog, needsIndex = p.staleAvailability(pluginID, available)
+	if needsCatalog {
+		if err := p.publishCatalog(ctx, false); err != nil {
+			return err
+		}
+	}
+	if needsIndex {
+		return p.publishIndex(ctx, false, pluginID)
+	}
+	return nil
+}
+
+func (p *SnapshotPublisher) staleAvailability(pluginID string, available bool) (bool, bool) {
 	p.indexMu.Lock()
-	cached, ok := p.indexes[pluginID]
-	p.indexMu.Unlock()
-	if !ok {
-		// Creating a missing index belongs to the startup and refresh paths.
-		// Building one from an ordinary reverse-sync tick would bind every
-		// native session (managed or not) in the sessions DB, and the reverse
-		// sync target scan subscribes DB records without the managed-hint
-		// filter, leaking unmanaged sessions into event streaming.
-		return nil
-	}
-	if cached.Available == available {
-		return nil
-	}
-	p.InvalidateConversationIndex(pluginID)
-	return p.EnsureConversationIndexes(ctx, pluginID)
+	defer p.indexMu.Unlock()
+	index, hasIndex := p.indexes[pluginID]
+	catalog, hasCatalog := p.catalogAvailability[pluginID]
+	// A periodic probe must not initialize an unlisted scope. Its complete
+	// snapshot still belongs to the directory startup/refresh path.
+	needsIndex := hasIndex && index.Available != available
+	return available && (needsIndex || hasCatalog && !catalog), needsIndex
 }
 
 // RefreshConversationIndexes sends cached in-memory conversation indexes to Realtime
@@ -248,6 +275,8 @@ func (p *SnapshotPublisher) RefreshConversationIndexes(ctx context.Context) erro
 	if p == nil || p.Sink == nil {
 		return nil
 	}
+	p.directoryMu.Lock()
+	defer p.directoryMu.Unlock()
 	cfg := p.CurrentConfig()
 	p.indexMu.Lock()
 	pluginIDs := make([]string, 0, len(p.indexes))
@@ -285,8 +314,8 @@ func (p *SnapshotPublisher) ConversationIndexSummary() (pluginScopes, conversati
 	if p == nil {
 		return 0, 0
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.indexMu.Lock()
+	defer p.indexMu.Unlock()
 	for _, index := range p.indexes {
 		pluginScopes++
 		conversations += len(index.Conversations)
@@ -362,6 +391,8 @@ func (p *SnapshotPublisher) PublishIndexHint(pluginID string, hint pluginruntime
 	if pluginID == "" {
 		return fmt.Errorf("conversation index hint requires plugin_id")
 	}
+	p.directoryMu.Lock()
+	defer p.directoryMu.Unlock()
 	p.indexMu.Lock()
 	plugin, ok := p.indexes[pluginID]
 	if !ok {
@@ -433,10 +464,27 @@ func (p *SnapshotPublisher) PublishForegroundDetails(force bool) error {
 	return nil
 }
 
+// ReplayForegroundDetail delivers the verified foreground snapshot to a
+// conversation body subscriber that attached after the select response.
+func (p *SnapshotPublisher) ReplayForegroundDetail(pluginID, conversationID string) error {
+	if p == nil || p.DetailSnapshots == nil || !pluginruntime.RemoteEnabled(p.CurrentConfig(), pluginID) {
+		return nil
+	}
+	snapshot, ok := p.DetailSnapshots.GetForRuntime(pluginID, conversationID)
+	if !ok || !firstNonEmptyBool(snapshot["desktop_foreground"]) || firstNonEmptyBool(snapshot["detail_stale"]) {
+		return nil
+	}
+	return p.publishDetail(snapshot, true)
+}
+
 // PublishLiveDetail materializes and publishes one foreground watcher result.
 // A watcher transition is also responsible for making the previously foreground
 // conversation explicitly stale before the new one becomes visible remotely.
 func (p *SnapshotPublisher) PublishLiveDetail(ctx context.Context, conversationID, pluginID string, session pluginruntime.NativeSession, cwd string, details map[string]any) error {
+	return p.publishLiveDetail(ctx, conversationID, pluginID, session, cwd, details, false)
+}
+
+func (p *SnapshotPublisher) publishLiveDetail(ctx context.Context, conversationID, pluginID string, session pluginruntime.NativeSession, cwd string, details map[string]any, force bool) error {
 	if p == nil || len(details) == 0 {
 		return nil
 	}
@@ -476,7 +524,7 @@ func (p *SnapshotPublisher) PublishLiveDetail(ctx context.Context, conversationI
 	if previousForeground != conversationID && firstNonEmptyBool(payload["desktop_foreground"]) {
 		p.acknowledgeDesktopRead(pluginID, conversationID)
 	}
-	return p.publishDetail(payload, false)
+	return p.publishDetail(payload, force)
 }
 
 func (p *SnapshotPublisher) acknowledgeDesktopRead(pluginID, conversationID string) {

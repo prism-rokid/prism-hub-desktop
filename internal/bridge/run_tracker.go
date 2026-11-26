@@ -30,9 +30,14 @@ type trackedForwardRun struct {
 	TerminalUntil time.Time
 }
 
+type forwardRunKey struct {
+	pluginID  string
+	requestID string
+}
+
 type RunTracker struct {
 	mu            sync.Mutex
-	runs          map[string]trackedForwardRun
+	runs          map[forwardRunKey]trackedForwardRun
 	now           func() time.Time
 	activeTTL     time.Duration
 	terminalGrace time.Duration
@@ -40,7 +45,7 @@ type RunTracker struct {
 
 func NewRunTracker() *RunTracker {
 	return &RunTracker{
-		runs:          map[string]trackedForwardRun{},
+		runs:          map[forwardRunKey]trackedForwardRun{},
 		now:           time.Now,
 		activeTTL:     defaultForwardRunTTL,
 		terminalGrace: defaultForwardRunTerminal,
@@ -51,8 +56,8 @@ func (t *RunTracker) Track(run ForwardRun) {
 	if t == nil {
 		return
 	}
-	requestID := strings.TrimSpace(run.RequestID)
-	if requestID == "" {
+	key := makeForwardRunKey(run.PluginID, run.RequestID)
+	if key.pluginID == "" || key.requestID == "" {
 		return
 	}
 	now := t.timeNow().UTC()
@@ -67,41 +72,41 @@ func (t *RunTracker) Track(run ForwardRun) {
 	defer t.mu.Unlock()
 	t.ensureRuns()
 	t.gcLocked(now)
-	t.runs[requestID] = tracked
+	t.runs[key] = tracked
 }
 
-func (t *RunTracker) MarkTerminal(requestID string) {
+func (t *RunTracker) MarkTerminal(pluginID, requestID string) {
 	if t == nil {
 		return
 	}
-	requestID = strings.TrimSpace(requestID)
-	if requestID == "" {
-		return
-	}
+	key := makeForwardRunKey(pluginID, requestID)
 	now := t.timeNow().UTC()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.gcLocked(now)
-	run, ok := t.runs[requestID]
+	run, ok := t.runs[key]
 	if !ok {
 		return
 	}
 	run.TerminalUntil = now.Add(t.terminalGraceValue())
 	run.ExpiresAt = run.TerminalUntil
-	t.runs[requestID] = run
+	t.runs[key] = run
 }
 
-func (t *RunTracker) Release(requestID string) {
+func (t *RunTracker) Release(pluginID, requestID string) {
 	if t == nil {
-		return
-	}
-	requestID = strings.TrimSpace(requestID)
-	if requestID == "" {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.runs, requestID)
+	delete(t.runs, makeForwardRunKey(pluginID, requestID))
+}
+
+func makeForwardRunKey(pluginID, requestID string) forwardRunKey {
+	return forwardRunKey{
+		pluginID:  strings.ToLower(strings.TrimSpace(pluginID)),
+		requestID: strings.TrimSpace(requestID),
+	}
 }
 
 func (t *RunTracker) ShouldSuppress(pluginID, conversationID string, session pluginruntime.NativeSession, event pluginruntime.PluginEvent) bool {
@@ -117,8 +122,8 @@ func (t *RunTracker) ShouldSuppress(pluginID, conversationID string, session plu
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.gcLocked(now)
-	for _, run := range t.runs {
-		if strings.ToLower(strings.TrimSpace(run.PluginID)) != pluginID {
+	for key, run := range t.runs {
+		if key.pluginID != pluginID || eventIsForDifferentNativeRun(event, run.NativeRunID) {
 			continue
 		}
 		if run.TerminalUntil.IsZero() {
@@ -181,9 +186,15 @@ func runMatchesEvent(run trackedForwardRun, session pluginruntime.NativeSession,
 func eventRunCandidates(event pluginruntime.PluginEvent) []string {
 	values := []string{
 		strings.TrimSpace(event.ID),
-		payloadString(event.Payload, "run_id", "runId", "native_run_id", "turn_id", "turnId", "task_id"),
+		payloadString(event.Payload, "native_run_id", "run_id", "runId", "turn_id", "turnId", "task_id"),
 	}
 	return normalizeCandidates(values)
+}
+
+func eventIsForDifferentNativeRun(event pluginruntime.PluginEvent, runID string) bool {
+	eventRunID := payloadString(event.Payload, "native_run_id")
+	runID = strings.TrimSpace(runID)
+	return eventRunID != "" && runID != "" && eventRunID != runID
 }
 
 func eventSessionCandidates(event pluginruntime.PluginEvent) []string {
@@ -234,7 +245,7 @@ func normalizeCandidates(values []string) []string {
 
 func (t *RunTracker) ensureRuns() {
 	if t.runs == nil {
-		t.runs = map[string]trackedForwardRun{}
+		t.runs = map[forwardRunKey]trackedForwardRun{}
 	}
 }
 

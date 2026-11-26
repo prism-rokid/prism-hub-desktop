@@ -45,6 +45,29 @@ func TestSnapshotPublisherSuppressesObservationTimeOnlyChanges(t *testing.T) {
 	}
 }
 
+func TestReplayForegroundDetailOnlySendsCurrentConversation(t *testing.T) {
+	store := NewDetailSnapshotStore()
+	live := map[string]any{"plugin_id": "dot", "conversation_id": "current",
+		"desktop_foreground": true, "detail_stale": false}
+	store.PutForRuntime("dot", live)
+	store.PutForRuntime("dot", map[string]any{"plugin_id": "dot", "conversation_id": "other",
+		"desktop_foreground": false, "detail_stale": true})
+	sink := &recordingSink{}
+	publisher := NewSnapshotPublisher(nil, nil, remoteAuthorizedConfig("dot"), nil, sink, store, nil)
+	if err := publisher.publishDetail(live, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"other", "current"} {
+		if err := publisher.ReplayForegroundDetail("dot", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshots := sink.conversationDetailSnapshots()
+	if len(snapshots) != 2 || snapshots[1]["conversation_id"] != "current" {
+		t.Fatalf("expected one replay of foreground state, got %#v", snapshots)
+	}
+}
+
 func TestPublisherRevokesTerminalControlsWhenWatcherDisconnects(t *testing.T) {
 	store := NewDetailSnapshotStore()
 	store.PutForRuntime("claudecode", map[string]any{

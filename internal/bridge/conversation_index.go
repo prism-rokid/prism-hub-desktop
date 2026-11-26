@@ -204,10 +204,17 @@ func conversationIndexItemFromHint(hint pluginruntime.NativeSessionHint, record 
 	if !hint.LastActivityAt.IsZero() {
 		updatedAt = hint.LastActivityAt.UTC().Format(time.RFC3339Nano)
 	}
+	cwd := strings.TrimSpace(hint.Cwd)
+	if cwd == "" {
+		// The wire index uses cwd as the folder label. Keep presentation
+		// metadata out of the stored native working directory.
+		cwd = strings.TrimSpace(hint.Metadata["group_label"])
+
+	}
 	return transport.ConversationIndexItem{
 		ID:        conversationID,
 		Title:     strings.TrimSpace(hint.Title),
-		Cwd:       strings.TrimSpace(hint.Cwd),
+		Cwd:       cwd,
 		Status:    conversationStatusFromHint(hint),
 		UpdatedAt: updatedAt,
 		SortAt:    firstNonEmpty(strings.TrimSpace(hint.Metadata["sort_at"]), updatedAt),
@@ -281,6 +288,8 @@ func indexMetadataSummary(metadata map[string]string) map[string]string {
 		"approval_request_id":          {},
 		"primary_action":               {},
 		"can_queue":                    {},
+		"can_send":                     {},
+		"activity_status":              {},
 		"sandbox_policy":               {},
 		"context_window_total":         {},
 		"context_window_usage_percent": {},

@@ -417,13 +417,23 @@ func runBridgeRuntime(parent context.Context, cfg *bridgeconfig.Config, db *pris
 	}()
 	fmt.Fprintf(stdout, "prism runtime running: config=%s db=%s realtime=%s\n",
 		configPath, dbPath, realtimeURL)
+	var selections *sharedDesktopSelections
+	if runtimeGOOS() == "darwin" {
+		if dir, err := desktopHostRuntimeDirectory(); err == nil {
+			selections = loadSharedDesktopSelections(dir)
+		}
+	}
 	queryService := &bridge.QueryService{
-		DB:              db,
-		History:         &bridge.HistoryService{DB: db},
-		Service:         router.Service,
-		ConfigProvider:  router.ConfigProvider,
-		DetailSnapshots: detailSnapshots,
-		Logger:          logger,
+		PrepareSelection: func(ctx context.Context, pluginID string) error {
+			return prepareSharedDesktopSelection(ctx, router.ConfigProvider(), pluginID)
+		},
+		SnapshotPublisher: snapshotPublisher,
+		DB:                db,
+		History:           &bridge.HistoryService{DB: db},
+		Service:           router.Service,
+		ConfigProvider:    router.ConfigProvider,
+		DetailSnapshots:   detailSnapshots,
+		Logger:            logger,
 	}
 	for {
 		select {
@@ -502,7 +512,7 @@ func runBridgeRuntime(parent context.Context, cfg *bridgeconfig.Config, db *pris
 					} else {
 						logger.Info("bridge query received", "msg_id", in.MessageID)
 					}
-					if err := handleBridgeQuery(queryCtx, client, queryService, in); err != nil {
+					if err := handleBridgeQuery(queryCtx, client, queryService, selections, in); err != nil {
 						logger.Warn("bridge query failed", "msg_id", in.MessageID, "cost_ms", time.Since(queryStartedAt).Milliseconds(), "err", err)
 					} else if in.Payload != nil {
 						logger.Info("bridge query response sent",
@@ -613,7 +623,7 @@ func handleDesktopLaunch(ctx context.Context, client *prismtransport.Client, con
 				response.Code = "desktop_launch_failed"
 				response.Message = specErr.Error()
 			} else if spec.Kind == pluginpkg.LaunchKindDesktopApp {
-				appSpec, ok := dashboardDesktopAppSpecByID(spec.App)
+				appSpec, ok := dashboardManifestDesktopApp(*manifest, spec.App)
 				if !ok {
 					response.Code = "desktop_launch_failed"
 					response.Message = fmt.Sprintf("hub has no desktop app spec for %q (declared by plugin %s)", spec.App, manifest.ID)
@@ -1108,7 +1118,7 @@ func handleConversationMenuSession(ctx context.Context, client *prismtransport.C
 	return err
 }
 
-func handleBridgeQuery(ctx context.Context, client *prismtransport.Client, service *bridge.QueryService, in prismtransport.Inbound) error {
+func handleBridgeQuery(ctx context.Context, client *prismtransport.Client, service *bridge.QueryService, selections *sharedDesktopSelections, in prismtransport.Inbound) error {
 	if client == nil {
 		return fmt.Errorf("realtime client unavailable")
 	}
@@ -1126,6 +1136,12 @@ func handleBridgeQuery(ctx context.Context, client *prismtransport.Client, servi
 		pluginID = strings.TrimSpace(payload.PluginID)
 	}
 	if queryType == "conversation.history.stream" {
+		if selections != nil && isRestoredPanelBody(payload) && pluginruntime.RemoteEnabled(service.CurrentConfig(), pluginID) {
+			selectRequest := &prismtransport.InboundPayload{QueryType: "conversation.select", PluginID: pluginID, ConversationID: conversationID}
+			if _, err := selections.selectSession(ctx, service.CurrentConfig(), selectRequest, true, service.Execute); err != nil {
+				slog.Warn("restore selected shared desktop session", "plugin_id", pluginID, "err", err)
+			}
+		}
 		return handleConversationHistoryStream(ctx, client, service, requestID, conversationID, pluginID, payload)
 	}
 	if queryType == "conversation.history.cancel" {
@@ -1138,7 +1154,13 @@ func handleBridgeQuery(ctx context.Context, client *prismtransport.Client, servi
 		PluginID:       pluginID,
 		Success:        false,
 	}
-	result, err := service.Execute(ctx, payload)
+	var result map[string]any
+	var err error
+	if queryType == "conversation.select" && selections != nil && pluginruntime.RemoteEnabled(service.CurrentConfig(), pluginID) {
+		result, err = selections.selectSession(ctx, service.CurrentConfig(), payload, false, service.Execute)
+	} else {
+		result, err = service.Execute(ctx, payload)
+	}
 	if err != nil {
 		responsePayload.Error = err.Error()
 	} else {
@@ -1198,6 +1220,11 @@ func handleConversationHistoryStream(_ context.Context, client *prismtransport.C
 		unregisterConversationHistoryRelay(bodyStreamID, relay)
 		cancel()
 		return err
+	}
+	if service.SnapshotPublisher != nil {
+		if err := service.SnapshotPublisher.ReplayForegroundDetail(stream.PluginID, stream.ConversationID); err != nil && service.Logger != nil {
+			service.Logger.Warn("replay foreground detail", "plugin_id", stream.PluginID, "err", err)
+		}
 	}
 	go relayConversationHistoryStream(streamCtx, cancel, client, requestID, bodyStreamID, pageID, stream, relay)
 	return nil
@@ -1584,7 +1611,7 @@ func newBridgeServiceFromConfig(cfg *bridgeconfig.Config) *pluginruntime.Service
 	if cfg != nil {
 		if discovered, err := pluginpkg.ScanDirs(pluginDirs(cfg)); err == nil {
 			for _, item := range discovered {
-				if !bridgePluginAllowed(cfg, item.Manifest.ID) {
+				if !bridgePluginAllowed(cfg, item.Manifest.ID) || !allowsSharedDesktopCompanion(item, pluginDirs(cfg)) {
 					continue
 				}
 				adapters = append(adapters, pluginpkg.NewProcessAdapterWithEnv(item, bridgePluginEnv(cfg, item)))
@@ -1630,7 +1657,7 @@ func newPluginReloader(cfg *bridgeconfig.Config, configPath string, svc *pluginr
 		Logger:   logger,
 		Include: func(item pluginpkg.Discovered) bool {
 			current := configProvider()
-			return bridgePluginAllowed(current, item.Manifest.ID)
+			return bridgePluginAllowed(current, item.Manifest.ID) && allowsSharedDesktopCompanion(item, pluginDirs(current))
 		},
 		NewAdapter: func(item pluginpkg.Discovered) pluginruntime.PluginAdapter {
 			return pluginpkg.NewProcessAdapterWithEnv(item, bridgePluginEnv(configProvider(), item))

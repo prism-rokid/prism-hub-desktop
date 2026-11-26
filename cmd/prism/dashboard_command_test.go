@@ -535,7 +535,8 @@ func TestDashboardRecoveryActionResources(t *testing.T) {
 		`result?.message || (result ? t("agent.managed_recovered"`,
 		`action: "agent-refresh"`,
 		`data-recovery-toggle="remote-enabled"`,
-		`updateHostPlugin(pluginId, true)`,
+		`updateHostPlugin(pluginId, enabled)`,
+		`toggle.checked = Boolean(hostPluginFor(pluginId))`,
 		`recoveryMenuMarkup({`,
 		`const remoteLifecycleStep = remoteEnabled ?`,
 		`${runtimeStatus}<i class="life-arrow"`,
@@ -570,7 +571,6 @@ func TestDashboardRecoveryActionResources(t *testing.T) {
 		"drawer.check_update,",
 		"recovery.agent_interrupted,",
 		"agent.refresh,",
-		"agent.remote_enabled_success,",
 		"agent.managed_recovered,",
 	} {
 		if !strings.Contains(string(translations), key) {
@@ -1442,6 +1442,29 @@ func TestDashboardHostPluginRegistrationReportsRuntimeUnavailable(t *testing.T) 
 	}
 }
 
+func TestDashboardRegistersExistingOnlyPlugin(t *testing.T) {
+	cfg := bridgeconfig.Default()
+	pluginsRoot := filepath.Join(t.TempDir(), "plugins")
+	writeDashboardTestPlugin(t, pluginsRoot, "dot", "Dot")
+	cfg.Bridge.PluginDirs = []string{pluginsRoot}
+	svc := pluginruntime.New(pluginruntime.StaticPlugin{
+		PluginID: "dot",
+		Capability: pluginruntime.Capability{
+			Available: true, CanForwardSync: true, CanListSessions: true,
+			CanReadHistory: true, CanWaitRun: true, CanAttachSession: true,
+		},
+	})
+	payload, err := dashboardHostPluginRegistrationPayloadWithService(cfg, svc, "dot")
+	if err != nil || payload["plugin_id"] != "dot" {
+		t.Fatalf("expected Dot registration payload, got %v (%v)", payload, err)
+	}
+	capabilities, _ := payload["capabilities"].(map[string]any)
+	if capabilities["can_start_session_with_message"] != false || capabilities["can_open_draft"] != false ||
+		capabilities["can_attach_session"] != true {
+		t.Fatalf("unexpected capabilities: %v", capabilities)
+	}
+}
+
 func TestDashboardEnvOnlyPluginConfigStaysEnabled(t *testing.T) {
 	pluginConfig := bridgeconfig.PluginConfig{
 		Env: map[string]string{
@@ -1991,6 +2014,11 @@ func TestDashboardLoginManagerDeviceFlowPersistsConfig(t *testing.T) {
 }
 
 func TestDashboardLoginManagerPasswordLoginUsesDirectBind(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "daemon-runtime-state.json")
+	previousStatePath := daemonRuntimeStatePath
+	daemonRuntimeStatePath = func() string { return statePath }
+	t.Cleanup(func() { daemonRuntimeStatePath = previousStatePath })
+
 	var seenLoginBody map[string]any
 	var seenPluginRegistration map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2032,6 +2060,10 @@ func TestDashboardLoginManagerPasswordLoginUsesDirectBind(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("password login: %v", err)
+	}
+	state, err := readDaemonRuntimeState(statePath)
+	if err != nil || state.ConnectionState != "disconnected" {
+		t.Fatalf("unexpected post-login connection state: %+v, %v", state, err)
 	}
 	if payload["approved"] != true {
 		t.Fatalf("expected approved payload, got %+v", payload)

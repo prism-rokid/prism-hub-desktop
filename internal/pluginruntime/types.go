@@ -537,6 +537,9 @@ type RuntimeStatus struct {
 	Steps             []RuntimeStep  `json:"steps,omitempty"`
 }
 
+// SharedWindowBindAction is local to the Hub. Remote clients cannot supply its target.
+const SharedWindowBindAction = "desktop.bind"
+
 type SessionControlRequest struct {
 	Session NativeSession `json:"session"`
 	Action  string        `json:"action"`
