@@ -4,13 +4,16 @@ const updateDialog = document.getElementById("update-dialog");
 const updateDetail = document.getElementById("update-detail");
 const updateInstall = document.getElementById("update-install");
 const updateLater = document.getElementById("update-later");
+const updateProgressBar = document.getElementById("update-progress");
+const updateProgressFill = document.getElementById("update-progress-fill");
 const updateToast = document.getElementById("update-toast");
 const updateTitle = document.getElementById("update-title");
 const updateToastIcon = document.getElementById("update-toast-icon");
 const updateToastTitle = document.getElementById("update-toast-title");
 const updateToastDetail = document.getElementById("update-toast-detail");
 let availableUpdate = null;
-let updateCheckInFlight = false;
+let pendingUpdateCheck = null;
+let installingVersion = "";
 let updateProgress = null;
 let updateToastTimer = 0;
 let shellLocale = detectShellLocale();
@@ -23,9 +26,13 @@ const updateTranslations = {
     availableDetail: "版本 {version} 已准备好。下载与校验完成后，Prism Hub 将自动重新启动。",
     installNow: "立即更新",
     installLater: "稍后更新",
+    preparingDetail: "正在检查可安装的更新。",
     installingDetail: "正在下载并校验版本 {version}。",
     installingProgressDetail: "正在下载并校验版本 {version}（{percent}%）。",
     installFailedDetail: "更新未完成，请稍后重试。",
+    installFailedTitle: "更新失败",
+    restartFailedTitle: "更新已安装",
+    restartFailedDetail: "请完全退出并重新打开 Prism Hub，以完成更新。",
     latestTitle: "已是最新版本",
     latestDetail: "当前 Prism Hub 已是最新版本。",
     checkFailedTitle: "检查更新失败",
@@ -37,9 +44,13 @@ const updateTranslations = {
     availableDetail: "Version {version} is ready. Prism Hub will restart after download and verification finish.",
     installNow: "Update now",
     installLater: "Later",
+    preparingDetail: "Checking for an update to install.",
     installingDetail: "Downloading and verifying version {version}.",
     installingProgressDetail: "Downloading and verifying version {version} ({percent}%).",
     installFailedDetail: "The update did not complete. Please try again later.",
+    installFailedTitle: "Update failed",
+    restartFailedTitle: "Update installed",
+    restartFailedDetail: "Quit and reopen Prism Hub to finish the update.",
     latestTitle: "You're up to date",
     latestDetail: "Prism Hub is already on the latest version.",
     checkFailedTitle: "Couldn't check for updates",
@@ -51,9 +62,13 @@ const updateTranslations = {
     availableDetail: "バージョン {version} の準備ができました。ダウンロードと検証が完了すると、Prism Hub は自動的に再起動します。",
     installNow: "今すぐ更新",
     installLater: "後で",
+    preparingDetail: "インストール可能な更新を確認しています。",
     installingDetail: "バージョン {version} をダウンロードして検証しています。",
     installingProgressDetail: "バージョン {version} をダウンロードして検証しています（{percent}%）。",
     installFailedDetail: "更新を完了できませんでした。しばらくしてからもう一度お試しください。",
+    installFailedTitle: "更新に失敗しました",
+    restartFailedTitle: "更新をインストールしました",
+    restartFailedDetail: "Prism Hub を終了し、もう一度開いて更新を完了してください。",
     latestTitle: "最新の状態です",
     latestDetail: "Prism Hub はすでに最新バージョンです。",
     checkFailedTitle: "更新を確認できませんでした",
@@ -207,38 +222,33 @@ dashboard.addEventListener("load", () => {
 });
 
 function renderUpdateDialog() {
-  const version = availableUpdate?.version || "";
+  const installing = updateDialogState === "installing";
+  const version = installing ? installingVersion : availableUpdate?.version || "";
   updateTitle.textContent = updateText("availableTitle");
   updateLater.textContent = updateText("installLater");
   updateInstall.textContent = updateText("installNow");
-  const installing = updateDialogState === "installing";
+  updateInstall.disabled = installing;
+  updateLater.disabled = installing;
+  const percent = updateProgress?.total
+    ? Math.min(100, Math.floor((updateProgress.downloaded / updateProgress.total) * 100))
+    : null;
   let detail = updateText("availableDetail", { version });
   if (installing) {
-    const percent = updateProgress?.total
-      ? Math.min(100, Math.floor((updateProgress.downloaded / updateProgress.total) * 100))
-      : null;
-    detail = percent === null
-      ? updateText("installingDetail", { version })
-      : updateText("installingProgressDetail", { version, percent });
+    detail = !version
+      ? updateText("preparingDetail")
+      : percent === null
+        ? updateText("installingDetail", { version })
+        : updateText("installingProgressDetail", { version, percent });
   } else if (updateDialogState === "failed") {
     detail = updateText("installFailedDetail");
   }
   updateDetail.textContent = detail;
-  const progress = document.getElementById("update-progress");
-  if (progress) {
-    progress.setAttribute("aria-hidden", installing ? "false" : "true");
-    const fill = document.getElementById("update-progress-fill");
-    if (fill) {
-      const percent = updateProgress?.total
-        ? Math.min(100, Math.max(2, Math.floor((updateProgress.downloaded / updateProgress.total) * 100)))
-        : 0;
-      fill.style.width = `${installing && updateProgress?.total ? percent : 0}%`;
-    }
-  }
+  updateProgressBar.setAttribute("aria-hidden", installing ? "false" : "true");
+  updateProgressFill.style.width = `${installing && percent !== null ? Math.max(2, percent) : 0}%`;
 }
 
 function showUpdateDialog() {
-  updateDialogState = "available";
+  hideUpdateToast();
   renderUpdateDialog();
   updateDialog.setAttribute("aria-hidden", "false");
 }
@@ -265,6 +275,14 @@ function showLatestVersionToast() {
   });
 }
 
+function showUpdateRestartRequired() {
+  showUpdateToast({
+    title: updateText("restartFailedTitle"),
+    detail: updateText("restartFailedDetail"),
+    tone: "ok",
+  });
+}
+
 function showUpdateCheckFailure(error) {
   const rawMessage = String(error?.message || error || "");
   const detail = /未启用自动更新|automatic updates are disabled/i.test(rawMessage)
@@ -280,19 +298,35 @@ function hideUpdateToast() {
 }
 
 async function checkForDesktopUpdate({ manual = false } = {}) {
-  if (updateCheckInFlight || availableUpdate || !window.__TAURI__?.core?.invoke) return;
-  updateCheckInFlight = true;
+  if (updateDialogState === "installing" || !window.__TAURI__?.core?.invoke) return;
+  if (updateDialogState === "installed") {
+    if (manual) showUpdateRestartRequired();
+    return;
+  }
+  if (pendingUpdateCheck) {
+    pendingUpdateCheck.manual ||= manual;
+    return;
+  }
+  const check = { manual };
+  pendingUpdateCheck = check;
   try {
     const update = await invoke("check_for_update");
-    if (update) {
+    if (pendingUpdateCheck !== check) return;
+    if (availableUpdate?.version !== update?.version) {
       availableUpdate = update;
+      updateDialogState = "available";
       applyUpdateMenuState();
       notifyDashboardUpdateState();
-    } else if (manual) {
-      showLatestVersionToast();
+      if (!update) hideUpdateDialog();
+      else if (updateDialog.getAttribute("aria-hidden") === "false") renderUpdateDialog();
+    }
+    if (check.manual) {
+      if (update) showUpdateDialog();
+      else showLatestVersionToast();
     }
   } catch (error) {
-    if (manual) {
+    if (pendingUpdateCheck !== check) return;
+    if (check.manual) {
       showUpdateCheckFailure(error);
     } else {
       // An unavailable release service must never prevent the local Hub from
@@ -300,7 +334,7 @@ async function checkForDesktopUpdate({ manual = false } = {}) {
       console.warn("Unable to check for Prism Hub updates", error);
     }
   } finally {
-    updateCheckInFlight = false;
+    if (pendingUpdateCheck === check) pendingUpdateCheck = null;
   }
 }
 
@@ -327,24 +361,50 @@ function notifyDashboardUpdateState() {
 }
 
 async function installDesktopUpdate() {
-  if (!availableUpdate || updateDialogState === "installing") return;
-  updateInstall.disabled = true;
-  updateLater.disabled = true;
+  if (updateDialogState === "installing") return;
+  if (!availableUpdate) {
+    // A Dashboard click may arrive before its copy of the offer is cleared.
+    await checkForDesktopUpdate({ manual: true });
+    return;
+  }
+  // Installation fetches its own release information. Disregard responses to
+  // earlier checks so they cannot overwrite the version being installed.
+  pendingUpdateCheck = null;
+  hideUpdateToast();
   updateDialogState = "installing";
+  installingVersion = "";
   updateProgress = null;
   renderUpdateDialog();
   notifyDashboardUpdateState();
+  let installed;
   try {
-    await invoke("install_update");
-    await invoke("plugin:process|restart");
+    installed = await invoke("install_update");
   } catch (error) {
     console.error("Unable to install Prism Hub update", error);
     updateDialogState = "failed";
     updateProgress = null;
     renderUpdateDialog();
     notifyDashboardUpdateState();
-    updateInstall.disabled = false;
-    updateLater.disabled = false;
+    if (updateDialog.getAttribute("aria-hidden") !== "false") {
+      showUpdateToast({ title: updateText("installFailedTitle"), detail: updateText("installFailedDetail") });
+    }
+    return;
+  }
+  availableUpdate = null;
+  updateDialogState = installed ? "installed" : "available";
+  updateProgress = null;
+  hideUpdateDialog();
+  applyUpdateMenuState();
+  notifyDashboardUpdateState();
+  if (!installed) {
+    showLatestVersionToast();
+    return;
+  }
+  try {
+    await invoke("plugin:process|restart");
+  } catch (error) {
+    console.error("Unable to restart Prism Hub after updating", error);
+    showUpdateRestartRequired();
   }
 }
 
@@ -423,9 +483,19 @@ setShellLocale(shellLocale);
 // Forward updater download progress from the Rust installer into the dialog
 // and the Dashboard drawer entry.
 window.__TAURI__?.event?.listen?.("prism://update-progress", (event) => {
+  if (updateDialogState !== "installing") return;
   updateProgress = event.payload ?? null;
-  if (updateDialogState === "installing") renderUpdateDialog();
+  renderUpdateDialog();
   notifyDashboardUpdateState();
+});
+window.__TAURI__?.event?.listen?.("prism://update-version", (event) => {
+  if (updateDialogState !== "installing" || typeof event.payload !== "string") return;
+  installingVersion = event.payload;
+  if (availableUpdate?.version !== installingVersion) {
+    availableUpdate = { version: installingVersion };
+    applyUpdateMenuState();
+  }
+  renderUpdateDialog();
 });
 
 startDashboard();

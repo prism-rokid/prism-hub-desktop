@@ -27,11 +27,12 @@ use tauri::menu::{IsMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::window::Color;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, Window, WindowEvent};
-use tauri_plugin_updater::{Update, UpdaterExt};
+use tauri_plugin_updater::{Error as UpdaterError, Update, UpdaterExt};
 
 const HUB_ADDR: &str = "127.0.0.1:17171";
 const HUB_STATUS_MAX_BYTES: usize = 512 * 1024;
 const SIDECAR_DIAGNOSTIC_TAIL_MAX_BYTES: usize = 4 * 1024;
+const UPDATE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TRAY_ID: &str = "prism-hub-tray";
 const MENU_SHOW: &str = "show";
 const MENU_QUIT: &str = "quit";
@@ -70,8 +71,8 @@ struct AppLifecycle {
 }
 
 #[derive(Default)]
-struct PendingUpdate {
-    value: Mutex<Option<Update>>,
+struct UpdateInstall {
+    lock: tauri::async_runtime::Mutex<()>,
 }
 
 // The tray follows the Dashboard's locale. The shell webview pushes it on
@@ -608,28 +609,81 @@ fn quit_prism_hub(app: AppHandle) {
     request_quit(&app);
 }
 
-#[tauri::command]
-async fn check_for_update(
-    app: AppHandle,
-    pending: tauri::State<'_, PendingUpdate>,
-) -> Result<Option<AvailableUpdate>, String> {
+async fn lookup_update(app: &AppHandle, phase: &str) -> Result<Option<Update>, String> {
     if !updater_enabled() {
         return Err("此本地测试构建未启用自动更新。".to_string());
     }
-    let update = app
-        .updater()
-        .map_err(|error| format!("初始化更新服务失败：{error}"))?
+    let updater = app
+        .updater_builder()
+        .timeout(UPDATE_REQUEST_TIMEOUT)
+        .configure_client(|client| {
+            client
+                .connect_timeout(UPDATE_REQUEST_TIMEOUT)
+                .read_timeout(UPDATE_REQUEST_TIMEOUT)
+        })
+        .build()
+        .map_err(|error| updater_failure(app, phase, None, "初始化更新服务失败", error))?;
+    updater
         .check()
         .await
-        .map_err(|error| format!("检查更新失败：{error}"))?;
-    let available = update.as_ref().map(|item| AvailableUpdate {
-        version: item.version.clone(),
-    });
-    *pending
-        .value
-        .lock()
-        .map_err(|_| "更新状态不可用。".to_string())? = update;
-    Ok(available)
+        .map_err(|error| updater_failure(app, phase, None, "检查更新失败", error))
+}
+
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>, String> {
+    Ok(lookup_update(&app, "check")
+        .await?
+        .map(|item| AvailableUpdate {
+            version: item.version,
+        }))
+}
+
+fn updater_failure(
+    app: &AppHandle,
+    phase: &str,
+    version: Option<&str>,
+    message: &str,
+    error: UpdaterError,
+) -> String {
+    // reqwest errors can print download URLs, which may contain signed query
+    // parameters. Keep the transport error and its cause without the URL.
+    let detail = match error {
+        UpdaterError::Reqwest(error) => {
+            let error = error.without_url();
+            match std::error::Error::source(&error) {
+                Some(cause) => format!("{error}: {cause}"),
+                None => error.to_string(),
+            }
+        }
+        UpdaterError::SignatureUtf8(_) => "签名文件不是有效的 UTF-8。".to_string(),
+        error => error.to_string(),
+    };
+    let message = format!("{message}：{detail}");
+    record_updater_event(app, phase, version, &message);
+    message
+}
+
+fn record_updater_event(app: &AppHandle, phase: &str, version: Option<&str>, detail: &str) {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let shell = &app.package_info().version;
+    let version = version.unwrap_or("-");
+    let detail = detail.replace(['\r', '\n'], " ");
+    let line = format!("{timestamp} shell={shell} phase={phase} update={version} {detail}\n");
+    let Some(log_dir) = desktop_log_dir() else {
+        eprint!("{line}");
+        return;
+    };
+    let result = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("desktop-updater.log"))
+        .and_then(|mut file| file.write_all(line.as_bytes()));
+    if result.is_err() {
+        eprint!("{line}");
+    }
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -642,53 +696,55 @@ struct UpdateProgress {
 #[tauri::command]
 async fn install_update(
     app: AppHandle,
-    pending: tauri::State<'_, PendingUpdate>,
-) -> Result<(), String> {
-    if !updater_enabled() {
-        return Err("此本地测试构建未启用自动更新。".to_string());
-    }
-    let update = pending
-        .value
-        .lock()
-        .map_err(|_| "更新状态不可用。".to_string())?
-        .take()
-        .ok_or_else(|| "没有可安装的 Prism Hub 更新。".to_string())?;
-    // download_and_install borrows the update, so a failed attempt can be
-    // restored and retried without another /current lookup.
+    install: tauri::State<'_, UpdateInstall>,
+) -> Result<bool, String> {
+    let _install = install
+        .lock
+        .try_lock()
+        .map_err(|_| "Prism Hub 正在安装更新。".to_string())?;
+    // A release can change while a discovered update is waiting in the UI.
+    // Fetch a matching URL and signature again on every install attempt.
+    let Some(update) = lookup_update(&app, "install-check").await? else {
+        return Ok(false);
+    };
+    let version = Some(update.version.as_str());
+    record_updater_event(&app, "download", version, "开始下载更新");
+    let _ = app.emit("prism://update-version", update.version.clone());
     let progress_app = app.clone();
-    let mut last_emit = std::time::Instant::now();
+    let mut last_emit = Instant::now();
+    let mut downloaded: u64 = 0;
     let mut last_emitted_bytes: u64 = 0;
-    let result = update
-        .download_and_install(
-            move |downloaded: usize, total: Option<u64>| {
-                let downloaded = downloaded as u64;
-                let now = std::time::Instant::now();
+    let bytes = update
+        .download(
+            move |chunk_size: usize, total: Option<u64>| {
+                downloaded = downloaded.saturating_add(chunk_size as u64);
+                let now = Instant::now();
                 let fresh = downloaded.saturating_sub(last_emitted_bytes) >= 512 * 1024;
-                if !fresh && now.duration_since(last_emit).as_millis() < 200 {
+                let finished = total.is_some_and(|total| downloaded >= total);
+                if last_emitted_bytes > 0
+                    && !fresh
+                    && !finished
+                    && now.duration_since(last_emit).as_millis() < 200
+                {
                     return;
                 }
                 last_emit = now;
                 last_emitted_bytes = downloaded;
                 let _ = progress_app.emit(
                     "prism://update-progress",
-                    UpdateProgress {
-                        downloaded,
-                        total,
-                    },
+                    UpdateProgress { downloaded, total },
                 );
             },
             || {},
         )
-        .await;
-    match result {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            if let Ok(mut guard) = pending.value.lock() {
-                *guard = Some(update);
-            }
-            Err(format!("下载或安装更新失败：{error}"))
-        }
-    }
+        .await
+        .map_err(|error| updater_failure(&app, "download", version, "下载或校验更新失败", error))?;
+    record_updater_event(&app, "install", version, "签名校验成功，开始安装更新");
+    update
+        .install(bytes)
+        .map_err(|error| updater_failure(&app, "install", version, "安装更新失败", error))?;
+    record_updater_event(&app, "install", version, "安装成功");
+    Ok(true)
 }
 
 fn dashboard_window_background(theme: &str) -> Color {
@@ -869,7 +925,7 @@ fn main() {
     builder
         .plugin(tauri_plugin_process::init())
         .manage(AppLifecycle::default())
-        .manage(PendingUpdate::default())
+        .manage(UpdateInstall::default())
         .manage(TrayState::default())
         .manage(HubSupervisor::new())
         .setup(|app| {
@@ -920,7 +976,7 @@ fn handle_window_event(window: &Window, event: &WindowEvent) {
 
 fn handle_run_event(app: &AppHandle, event: RunEvent) {
     match event {
-        RunEvent::ExitRequested { api, .. } => {
+        RunEvent::ExitRequested { api, code, .. } if code != Some(tauri::RESTART_EXIT_CODE) => {
             if !app.state::<AppLifecycle>().is_quitting() {
                 api.prevent_exit();
                 request_quit(app);
@@ -1666,14 +1722,18 @@ fn sidecar_binary_path() -> Result<PathBuf, String> {
         .ok_or_else(|| "未找到随应用安装的 Prism Hub 程序。".to_string())
 }
 
+fn desktop_log_dir() -> Option<PathBuf> {
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))?;
+    let log_dir = PathBuf::from(home).join(".prism").join("logs");
+    fs::create_dir_all(&log_dir).ok()?;
+    Some(log_dir)
+}
+
 // The sidecar runs without a terminal in released Desktop builds. Retain its
 // most recent output so a startup failure can be diagnosed instead of being
 // reported only as a generic readiness timeout.
 fn sidecar_diagnostic_log_path() -> Option<PathBuf> {
-    let home = env::var_os("HOME")?;
-    let log_dir = PathBuf::from(home).join(".prism").join("logs");
-    fs::create_dir_all(&log_dir).ok()?;
-    Some(log_dir.join("desktop-sidecar.log"))
+    Some(desktop_log_dir()?.join("desktop-sidecar.log"))
 }
 
 fn sidecar_diagnostic_log_streams(path: &PathBuf) -> std::io::Result<(Stdio, Stdio)> {
